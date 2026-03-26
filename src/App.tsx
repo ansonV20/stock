@@ -1,0 +1,1511 @@
+import { useEffect, useMemo, useState } from 'react'
+import Alert from '@mui/material/Alert'
+import CircularProgress from '@mui/material/CircularProgress'
+import Paper from '@mui/material/Paper'
+import Table from '@mui/material/Table'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import Autocomplete from '@mui/material/Autocomplete'
+import TextField from '@mui/material/TextField'
+import {
+  enrichStocksWithProfitLoss,
+  fetchAllSheetsData,
+  parseNumber,
+  resolveAction,
+  type SheetData,
+} from './sheetsData'
+import { Box, Button } from '@mui/material'
+import { MdDataUsage, MdTableRows } from 'react-icons/md'
+import { LineChart } from '@mui/x-charts/LineChart'
+import { PieChart } from '@mui/x-charts/PieChart'
+import { BarChart } from '@mui/x-charts/BarChart'
+import './App.css'
+
+const CURRENCY_OPTIONS = ['USD', 'HKD'] as const
+type CurrencyCode = (typeof CURRENCY_OPTIONS)[number]
+
+type CurrencyRatesCache = {
+  timestamp: number
+  rates: Record<CurrencyCode, number>
+}
+
+type HoldingSnapshot = {
+  symbol: string
+  displayName: string
+  quantity: number
+  avgBuyPriceUsd: number
+}
+
+type FinnhubQuoteResponse = {
+  c?: number
+}
+
+type FinnhubMarketStatusResponse = {
+  isOpen?: boolean
+}
+
+const DEFAULT_RATES: Record<CurrencyCode, number> = {
+  USD: 1,
+  HKD: 7.8,
+}
+
+const CURRENCY_COOKIE_KEY = 'currency_rates_cache_v1'
+const COOKIE_TTL_MS = 2 * 24 * 60 * 60 * 1000
+const CURRENCY_API_URL =
+  'https://api.currencyapi.com/v3/latest?apikey=cur_live_PJHFzvzysrami5rnf9VB8aIqKnhYcb3Fp3JP7Lvk&currencies=USD%2CHKD'
+const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i0d6pcdu9r01qo88aim4ig'
+const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
+const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
+const HOLDINGS_UPDATE_INTERVAL_MS = 10 * 60 * 1000
+
+function normalizeHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function findColumnIndex(headers: string[], keys: string[]): number {
+  const normalizedKeys = keys.map((key) => normalizeHeader(key))
+
+  return headers.findIndex((header) => {
+    const normalizedHeader = normalizeHeader(header)
+    return normalizedKeys.some((key) => normalizedHeader.includes(key))
+  })
+}
+
+function formatCurrency(value: number, currency: CurrencyCode): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(2)}%`
+}
+
+function resolveMoneyMoveType(value: string): 'in' | 'bor' | 'back' | 'out' | null {
+  const normalized = value.trim().toLowerCase()
+
+  if (normalized === 'in' || normalized.includes('deposit')) {
+    return 'in'
+  }
+
+  if (normalized === 'bor' || normalized.includes('borrow')) {
+    return 'bor'
+  }
+
+  if (normalized === 'back' || normalized.includes('repay')) {
+    return 'back'
+  }
+
+  if (normalized === 'out' || normalized.includes('withdraw')) {
+    return 'out'
+  }
+
+  return null
+}
+
+function getCookie(name: string): string | null {
+  const cookieEntries = document.cookie ? document.cookie.split('; ') : []
+  const keyPrefix = `${name}=`
+  const matched = cookieEntries.find((entry) => entry.startsWith(keyPrefix))
+
+  if (!matched) {
+    return null
+  }
+
+  return decodeURIComponent(matched.slice(keyPrefix.length))
+}
+
+function setCookie(name: string, value: string, maxAgeSeconds: number): void {
+  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`
+}
+
+function convertAmount(
+  amount: number,
+  fromCurrency: CurrencyCode,
+  toCurrency: CurrencyCode,
+  rates: Record<CurrencyCode, number>,
+): number {
+  if (fromCurrency === toCurrency) {
+    return amount
+  }
+
+  const fromRate = rates[fromCurrency]
+  const toRate = rates[toCurrency]
+
+  if (!Number.isFinite(fromRate) || !Number.isFinite(toRate) || fromRate <= 0 || toRate <= 0) {
+    return amount
+  }
+
+  const amountInUsd = amount / fromRate
+  return amountInUsd * toRate
+}
+
+function resolveCurrencyCode(value: string | undefined): CurrencyCode {
+  const normalized = (value ?? '').trim().toUpperCase()
+  return normalized === 'HKD' ? 'HKD' : 'USD'
+}
+
+function parseDateValue(raw: string): Date | null {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const googleDateMatch = trimmed.match(
+    /^Date\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(\d+),\s*(\d+),\s*(\d+))?\)$/i,
+  )
+  if (googleDateMatch) {
+    const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw] = googleDateMatch
+    const year = Number(yearRaw)
+    // Google Charts Date(...) month is already zero-based.
+    const month = Number(monthRaw)
+    const day = Number(dayRaw)
+    const hour = hourRaw ? Number(hourRaw) : 0
+    const minute = minuteRaw ? Number(minuteRaw) : 0
+    const second = secondRaw ? Number(secondRaw) : 0
+
+    const parsedGoogleDate = new Date(year, month, day, hour, minute, second)
+    return Number.isNaN(parsedGoogleDate.getTime()) ? null : parsedGoogleDate
+  }
+
+  const normalized = trimmed.replace(/\./g, '-').replace(/\//g, '-')
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function toMonthKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function formatMonthLabel(monthKey: string): string {
+  const matched = monthKey.match(/^(\d{4})-(\d{2})$/)
+  if (!matched) {
+    return monthKey
+  }
+
+  const [, year, month] = matched
+  return `${month}/${year.slice(-2)}`
+}
+
+function formatDateDDMMYYYY(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  return `${day}/${month}/${year}`
+}
+
+function formatTimelineLabel(date: Date, index: number): string {
+  return `${formatDateDDMMYYYY(date)} #${String(index + 1).padStart(2, '0')}`
+}
+
+function formatCompactAxisDate(label: string): string {
+  const datePart = label.split(' #')[0]
+  const match = datePart.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+
+  if (!match) {
+    return datePart
+  }
+
+  const [, day, month, year] = match
+  return `${day}/${month}/${year.slice(-2)}`
+}
+
+function App() {
+  const [stocksData, setStocksData] = useState<SheetData>({ headers: [], rows: [] })
+  const [dividendData, setDividendData] = useState<SheetData>({ headers: [], rows: [] })
+  const [moneyMoveData, setMoneyMoveData] = useState<SheetData>({ headers: [], rows: [] })
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState<'table' | 'dataShow'>('dataShow')
+  const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD')
+  const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
+  const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
+  const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
+  const [isQuoteLoading, setIsQuoteLoading] = useState(false)
+  const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
+
+  const spreadsheetId = import.meta.env.VITE_SPREADSHEET_ID
+  const stocksGid = import.meta.env.VITE_STOCKS
+  const dividendGid = import.meta.env.VITE_DIVIDEND
+  const moneymoveGid = import.meta.env.VITE_MONEYMOVE
+
+  const isConfigValid = useMemo(
+    () =>
+      Boolean(
+        spreadsheetId?.trim() &&
+          stocksGid?.trim() &&
+          dividendGid?.trim() &&
+          moneymoveGid?.trim(),
+      ),
+    [spreadsheetId, stocksGid, dividendGid, moneymoveGid],
+  )
+
+  const displayStocksData = useMemo(() => enrichStocksWithProfitLoss(stocksData), [stocksData])
+
+  const holdings = useMemo<HoldingSnapshot[]>(() => {
+    const symbolIndex = findColumnIndex(stocksData.headers, [
+      'symbol',
+      'ticker',
+      'code',
+      'stock',
+      'company',
+    ])
+    const nameIndex = findColumnIndex(stocksData.headers, ['name', 'company'])
+    const actionIndex = findColumnIndex(stocksData.headers, [
+      'action',
+      'type',
+      'side',
+      'buysell',
+      'operation',
+    ])
+    const quantityIndex = findColumnIndex(stocksData.headers, [
+      'qty',
+      'quantity',
+      'share',
+      'units',
+      'vol',
+      'volume',
+    ])
+    const priceIndex = findColumnIndex(stocksData.headers, [
+      'price',
+      'avgprice',
+      'unitprice',
+      'cost',
+      'rate',
+    ])
+    const totalIndex = findColumnIndex(stocksData.headers, [
+      'total',
+      'amount',
+      'value',
+      'proceeds',
+      'market value',
+      'marketvalue',
+    ])
+
+    if (symbolIndex === -1 && nameIndex === -1) {
+      // Need at least a symbol or name to identify the holding
+      return []
+    }
+
+    if (quantityIndex === -1) {
+      return []
+    }
+
+    const positionBySymbol = new Map<string, { name: string; quantity: number; totalCost: number }>()
+
+    stocksData.rows.forEach((row) => {
+      let symbol = symbolIndex >= 0 ? (row[symbolIndex] ?? '').trim().toUpperCase() : ''
+      const name = nameIndex >= 0 ? (row[nameIndex] ?? '').trim() : ''
+
+      if (!symbol && name) {
+        // Fallback: use name as symbol if symbol is missing logic-wise
+        symbol = name.toUpperCase().substring(0, 10).replace(/\s/g, '')
+      }
+
+      if (!symbol) {
+        return
+      }
+
+      const quantitySigned = parseNumber(row[quantityIndex] ?? '')
+      const quantity = Math.abs(quantitySigned)
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        return
+      }
+
+      const actionRaw = actionIndex >= 0 ? row[actionIndex] ?? '' : ''
+      const action = resolveAction(actionRaw, quantitySigned)
+      if (!action) {
+        return
+      }
+
+      const price = priceIndex >= 0 ? parseNumber(row[priceIndex] ?? '') : Number.NaN
+      const total = totalIndex >= 0 ? parseNumber(row[totalIndex] ?? '') : Number.NaN
+
+      const cost = Number.isFinite(total)
+        ? Math.abs(total)
+        : Number.isFinite(price)
+          ? Math.abs(price) * quantity
+          : Number.NaN
+
+      const existing = positionBySymbol.get(symbol) ?? { name: '', quantity: 0, totalCost: 0 }
+      if (!existing.name && nameIndex >= 0) {
+        existing.name = (row[nameIndex] ?? '').trim()
+      }
+
+      if (action === 'buy') {
+        if (!Number.isFinite(cost)) {
+          return
+        }
+
+        existing.quantity += quantity
+        existing.totalCost += cost
+        positionBySymbol.set(symbol, existing)
+        return
+      }
+
+      if (existing.quantity <= 0) {
+        positionBySymbol.set(symbol, existing)
+        return
+      }
+
+      const sellQty = Math.min(quantity, existing.quantity)
+      const avgCostBeforeSell = existing.quantity > 0 ? existing.totalCost / existing.quantity : 0
+      existing.quantity -= sellQty
+      existing.totalCost -= sellQty * avgCostBeforeSell
+
+      if (existing.quantity < 0.000001) {
+        existing.quantity = 0
+        existing.totalCost = 0
+      }
+
+      positionBySymbol.set(symbol, existing)
+    })
+
+    return Array.from(positionBySymbol.entries())
+      .filter(([, position]) => position.quantity > 0)
+      .map(([symbol, position]) => ({
+        symbol,
+        displayName: position.name ? `${position.name} (${symbol})` : symbol,
+        quantity: position.quantity,
+        avgBuyPriceUsd: position.totalCost / position.quantity,
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol))
+  }, [stocksData])
+
+  useEffect(() => {
+    const loadCurrencyRates = async () => {
+      const cachedRaw = getCookie(CURRENCY_COOKIE_KEY)
+
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw) as CurrencyRatesCache
+          if (
+            Number.isFinite(cached.timestamp) &&
+            Date.now() - cached.timestamp < COOKIE_TTL_MS &&
+            Number.isFinite(cached.rates.USD) &&
+            Number.isFinite(cached.rates.HKD)
+          ) {
+            setCurrencyRates({
+              USD: cached.rates.USD,
+              HKD: cached.rates.HKD,
+            })
+            return
+          }
+        } catch {
+          // Ignore invalid cache and continue with API request.
+        }
+      }
+
+      try {
+        const response = await fetch(CURRENCY_API_URL)
+        if (!response.ok) {
+          return
+        }
+
+        const payload = (await response.json()) as {
+          data?: Record<string, { value?: number }>
+        }
+
+        const usdValue = payload.data?.USD?.value
+        const hkdValue = payload.data?.HKD?.value
+
+        if (
+          typeof usdValue !== 'number' ||
+          typeof hkdValue !== 'number' ||
+          !Number.isFinite(usdValue) ||
+          !Number.isFinite(hkdValue) ||
+          usdValue <= 0 ||
+          hkdValue <= 0
+        ) {
+          return
+        }
+
+        const nextRates: Record<CurrencyCode, number> = {
+          USD: usdValue,
+          HKD: hkdValue,
+        }
+
+        setCurrencyRates(nextRates)
+
+        const cachePayload: CurrencyRatesCache = {
+          timestamp: Date.now(),
+          rates: nextRates,
+        }
+
+        setCookie(CURRENCY_COOKIE_KEY, JSON.stringify(cachePayload), COOKIE_TTL_MS / 1000)
+      } catch {
+        // Keep default rates when API fails.
+      }
+    }
+
+    void loadCurrencyRates()
+  }, [])
+
+  useEffect(() => {
+    if (!FINNHUB_TOKEN || holdings.length === 0) {
+      setIsQuoteLoading(false)
+      return
+    }
+
+    let isCancelled = false
+
+    const fetchHoldingsQuotes = async () => {
+      setIsQuoteLoading(true)
+
+      try {
+        const marketStatusResponse = await fetch(
+          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
+        )
+
+        if (!marketStatusResponse.ok) {
+          if (!isCancelled) {
+            setIsUsMarketOpen(null)
+          }
+          return
+        }
+
+        const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
+        const marketOpen = marketStatus.isOpen === true
+
+        if (!isCancelled) {
+          setIsUsMarketOpen(marketOpen)
+        }
+
+        if (!marketOpen) {
+          return
+        }
+
+        const quoteResults = await Promise.all(
+          holdings.map(async (holding) => {
+            const quoteResponse = await fetch(
+              `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
+            )
+
+            if (!quoteResponse.ok) {
+              return [holding.symbol, Number.NaN] as const
+            }
+
+            const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
+            const currentPrice = quote.c
+
+            return [
+              holding.symbol,
+              typeof currentPrice === 'number' && Number.isFinite(currentPrice)
+                ? currentPrice
+                : Number.NaN,
+            ] as const
+          }),
+        )
+
+        if (isCancelled) {
+          return
+        }
+
+        const nextQuotes: Record<string, number> = {}
+        quoteResults.forEach(([symbol, price]) => {
+          if (Number.isFinite(price)) {
+            nextQuotes[symbol] = price
+          }
+        })
+
+        setQuotesBySymbol(nextQuotes)
+        setQuoteUpdatedAt(Date.now())
+      } catch {
+        if (!isCancelled) {
+          setIsUsMarketOpen(null)
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsQuoteLoading(false)
+        }
+      }
+    }
+
+    void fetchHoldingsQuotes()
+    const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
+
+    return () => {
+      isCancelled = true
+      window.clearInterval(timer)
+    }
+  }, [holdings])
+
+  const summary = useMemo(() => {
+    const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
+      'amount',
+      'total',
+      'value',
+      'money',
+      'price',
+    ])
+    const moneyMoveActionIndex = findColumnIndex(moneyMoveData.headers, [
+      'action',
+      'type',
+      'note',
+      'description',
+      'do',
+    ])
+    const moneyMoveCurrencyIndex = findColumnIndex(moneyMoveData.headers, ['currency'])
+
+    let moneyMoveNet = 0
+    let borrowed = 0
+
+    moneyMoveData.rows.forEach((row) => {
+      if (moneyMoveAmountIndex === -1 || moneyMoveActionIndex === -1) {
+        return
+      }
+
+      const amount = parseNumber(row[moneyMoveAmountIndex] ?? '')
+      if (!Number.isFinite(amount)) {
+        return
+      }
+
+      const rowCurrency = resolveCurrencyCode(row[moneyMoveCurrencyIndex] ?? '')
+      const amountInSelectedCurrency = convertAmount(
+        Math.abs(amount),
+        rowCurrency,
+        selectedCurrency,
+        currencyRates,
+      )
+
+      const action = resolveMoneyMoveType(row[moneyMoveActionIndex] ?? '')
+      if (!action) {
+        return
+      }
+
+      if (action === 'in' || action === 'bor') {
+        moneyMoveNet += amountInSelectedCurrency
+      } else if (action === 'out' || action === 'back') {
+        moneyMoveNet -= amountInSelectedCurrency
+      }
+
+      if (action === 'bor') {
+        borrowed += amountInSelectedCurrency
+      } else if (action === 'back') {
+        borrowed -= amountInSelectedCurrency
+      }
+    })
+
+    const dividendAmountIndex = findColumnIndex(dividendData.headers, [
+      'dividend',
+      'div',
+      'amount',
+      'total',
+      'value',
+    ])
+    const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+    let dividendTotal = 0
+    dividendData.rows.forEach((row) => {
+      if (dividendAmountIndex === -1) {
+        return
+      }
+
+      const amount = parseNumber(row[dividendAmountIndex] ?? '')
+      if (Number.isFinite(amount)) {
+        const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+        dividendTotal += convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+      }
+    })
+
+    const actionIndex = findColumnIndex(stocksData.headers, ['action', 'type', 'side', 'buysell'])
+    const quantityIndex = findColumnIndex(stocksData.headers, ['qty', 'quantity', 'share', 'units'])
+    const totalIndex = findColumnIndex(stocksData.headers, ['total', 'amount', 'value', 'proceeds'])
+    const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
+    const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
+
+    let earnAll = 0
+    let earnTradeCount = 0
+    let percentSum = 0
+    let percentCount = 0
+    let totalBuyAmount = 0
+
+    displayStocksData.rows.forEach((row, rowIndex) => {
+      if (profitLossIndex !== -1) {
+        const profitLoss = parseNumber(row[profitLossIndex] ?? '')
+        if (Number.isFinite(profitLoss)) {
+          const rowCurrency = resolveCurrencyCode(
+            stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '',
+          )
+          earnAll += convertAmount(profitLoss, rowCurrency, selectedCurrency, currencyRates)
+          earnTradeCount += 1
+        }
+      }
+
+      if (percentIndex !== -1) {
+        const percentage = parseNumber(row[percentIndex] ?? '')
+        if (Number.isFinite(percentage)) {
+          percentSum += percentage
+          percentCount += 1
+        }
+      }
+
+      if (totalIndex !== -1) {
+        const actionValue =
+          actionIndex !== -1 ? stocksData.rows[rowIndex]?.[actionIndex] ?? '' : ''
+        const quantityValue =
+          quantityIndex !== -1
+            ? parseNumber(stocksData.rows[rowIndex]?.[quantityIndex] ?? '')
+            : 0
+        const totalValue = parseNumber(stocksData.rows[rowIndex]?.[totalIndex] ?? '')
+
+        const action = resolveAction(actionValue, quantityValue)
+
+        if (action === 'buy' && Number.isFinite(totalValue)) {
+          const rowCurrency = resolveCurrencyCode(
+            stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '',
+          )
+          totalBuyAmount += convertAmount(
+            Math.abs(totalValue),
+            rowCurrency,
+            selectedCurrency,
+            currencyRates,
+          )
+        }
+      }
+    })
+
+    const earnPerTrade = earnTradeCount > 0 ? earnAll / earnTradeCount : 0
+    const percentAverage = percentCount > 0 ? percentSum / percentCount : 0
+    const totalMoney = moneyMoveNet + earnAll + dividendTotal
+
+    return {
+      totalMoney,
+      borrowed,
+      dividendTotal,
+      earnAll,
+      earnPerTrade,
+      percentAverage,
+    }
+  }, [moneyMoveData, dividendData, displayStocksData, stocksData, selectedCurrency, currencyRates])
+
+  const moneyTimelineChart = useMemo(() => {
+    type TimelineEvent = {
+      date: Date
+      sourceOrder: number
+      cashDelta: number
+      stockAction?: { symbol: string; action: 'buy' | 'sell'; quantity: number; costPerShare: number }
+    }
+
+    const events: TimelineEvent[] = []
+
+    const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
+      'amount',
+      'total',
+      'value',
+      'money',
+      'price',
+    ])
+    const moneyMoveActionIndex = findColumnIndex(moneyMoveData.headers, [
+      'action',
+      'type',
+      'note',
+      'description',
+      'do',
+    ])
+    const moneyMoveDateIndex = findColumnIndex(moneyMoveData.headers, ['date', 'time'])
+    const moneyMoveCurrencyIndex = findColumnIndex(moneyMoveData.headers, ['currency'])
+
+    moneyMoveData.rows.forEach((row, rowIndex) => {
+      if (moneyMoveAmountIndex === -1 || moneyMoveActionIndex === -1 || moneyMoveDateIndex === -1) {
+        return
+      }
+
+      const amount = parseNumber(row[moneyMoveAmountIndex] ?? '')
+      const action = resolveMoneyMoveType(row[moneyMoveActionIndex] ?? '')
+      const date = parseDateValue(row[moneyMoveDateIndex] ?? '')
+
+      if (!Number.isFinite(amount) || !action || !date) {
+        console.warn('[Timeline] Skipped money move row:', { amount, action, date, row })
+        return
+      }
+
+      const rowCurrency = resolveCurrencyCode(row[moneyMoveCurrencyIndex] ?? '')
+      const normalizedAmount = convertAmount(
+        Math.abs(amount),
+        rowCurrency,
+        selectedCurrency,
+        currencyRates,
+      )
+
+      const delta = action === 'in' || action === 'bor' ? normalizedAmount : -normalizedAmount
+
+      events.push({
+        date,
+        sourceOrder: rowIndex,
+        cashDelta: delta,
+      })
+    })
+
+    const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+    const stocksActionIndex = findColumnIndex(stocksData.headers, [
+      'action',
+      'type',
+      'side',
+      'buysell',
+      'operation',
+    ])
+    const stocksSymbolIndex = findColumnIndex(stocksData.headers, [
+      'symbol',
+      'ticker',
+      'stock',
+      'code',
+      'company',
+    ])
+    const stocksQuantityIndex = findColumnIndex(stocksData.headers, [
+      'qty',
+      'quantity',
+      'share',
+      'units',
+      'vol',
+      'volume',
+    ])
+    const stocksTotalIndex = findColumnIndex(stocksData.headers, [
+      'total',
+      'amount',
+      'value',
+      'proceeds',
+      'market value',
+      'marketvalue',
+    ])
+    const stocksPriceIndex = findColumnIndex(stocksData.headers, [
+      'price',
+      'avgprice',
+      'unitprice',
+      'cost',
+      'rate',
+    ])
+    const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const stocksFeeIndex = findColumnIndex(stocksData.headers, [
+      'handlingfee',
+      'handling',
+      'fee',
+      'commission',
+      'charge',
+      'charges',
+    ])
+
+    stocksData.rows.forEach((row, rowIndex) => {
+      // We absolutely need Date and Quantity to process a stock row for the timeline
+      if (stocksDateIndex === -1 || stocksQuantityIndex === -1) {
+        return
+      }
+
+      const date = parseDateValue(row[stocksDateIndex] ?? '')
+      const quantitySigned = parseNumber(row[stocksQuantityIndex] ?? '')
+      
+      // Resolve action: Explicit column > inferred from sign > default to buy if +qty
+      const actionRaw = stocksActionIndex >= 0 ? row[stocksActionIndex] ?? '' : ''
+      const action = resolveAction(actionRaw, quantitySigned) ?? (quantitySigned > 0 ? 'buy' : 'sell')
+      
+      // Resolve Total: Explicit total > Price * Qty
+      let total = stocksTotalIndex >= 0 ? parseNumber(row[stocksTotalIndex] ?? '') : Number.NaN
+      
+      // Fallback if Total is missing but we have Price
+      if (!Number.isFinite(total) && stocksPriceIndex >= 0) {
+        const price = parseNumber(row[stocksPriceIndex] ?? '')
+        if (Number.isFinite(price)) {
+          total = Math.abs(price * Math.abs(quantitySigned))
+        }
+      }
+
+      if (!date || !Number.isFinite(total)) {
+        // Only warn if we really can't calculate a financial impact
+        if (rowIndex < 5) {
+             console.warn('[Timeline] Skipped stock row due to missing data:', { date, total, rowIndex })
+        }
+        return
+      }
+
+      const rowCurrency = resolveCurrencyCode(row[stocksCurrencyIndex] ?? '')
+      const tradeAmount = convertAmount(
+        Math.abs(total),
+        rowCurrency,
+        selectedCurrency,
+        currencyRates,
+      )
+
+      const feeRaw = stocksFeeIndex >= 0 ? parseNumber(row[stocksFeeIndex] ?? '') : 0
+      const fee = Number.isFinite(feeRaw)
+        ? convertAmount(Math.abs(feeRaw), rowCurrency, selectedCurrency, currencyRates)
+        : 0
+
+      const quantity = Math.abs(quantitySigned)
+      // Cost per share used for Cost Basis tracking
+      // If we bought, cost is total / qty.
+      // If we sold, we use the historical cost basis (FIFO/Avg) logic later, 
+      // but here we just need to know the money flow.
+      const costPerShare = quantity > 0 ? tradeAmount / quantity : 0
+      
+      const symbol = stocksSymbolIndex >= 0 ? (row[stocksSymbolIndex] ?? '').trim().toUpperCase() : 'UNKNOWN'
+
+      const cashDelta = action === 'buy' ? -(tradeAmount + fee) : tradeAmount - fee
+
+      events.push({
+        date,
+        sourceOrder: 10_000 + rowIndex,
+        cashDelta,
+        stockAction:
+          quantity > 0
+            ? { symbol, action, quantity, costPerShare }
+            : undefined,
+      })
+    })
+
+    const dividendAmountIndex = findColumnIndex(dividendData.headers, ['dividend', 'div', 'amount', 'value'])
+    const dividendDateIndex = findColumnIndex(dividendData.headers, ['date', 'time'])
+    const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+    dividendData.rows.forEach((row, rowIndex) => {
+      if (dividendAmountIndex === -1 || dividendDateIndex === -1) {
+        return
+      }
+
+      const amount = parseNumber(row[dividendAmountIndex] ?? '')
+      const date = parseDateValue(row[dividendDateIndex] ?? '')
+
+      if (!Number.isFinite(amount) || !date) {
+        console.warn('[Timeline] Skipped dividend row:', { amount, date, row })
+        return
+      }
+
+      const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+      const normalizedAmount = convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+
+      events.push({
+        date,
+        sourceOrder: 20_000 + rowIndex,
+        cashDelta: normalizedAmount,
+      })
+    })
+
+    console.log(`[Timeline] Collected ${events.length} total events`)
+
+    events.sort((a, b) => {
+      const timeDiff = a.date.getTime() - b.date.getTime()
+      if (timeDiff !== 0) {
+        return timeDiff
+      }
+      return a.sourceOrder - b.sourceOrder
+    })
+
+    const labels: string[] = []
+    const moneyIHaveValues: number[] = []
+    const totalMoneyValues: number[] = []
+
+    let runningCash = 0
+    const holdingsBySymbol = new Map<string, { quantity: number; costBasis: number }>()
+
+    events.forEach((event, index) => {
+      runningCash += event.cashDelta
+
+      if (event.stockAction) {
+        const { symbol, action, quantity, costPerShare } = event.stockAction
+        const costForThisPurchase = quantity * costPerShare
+        const holding = holdingsBySymbol.get(symbol) ?? { quantity: 0, costBasis: 0 }
+
+        if (action === 'buy') {
+          holding.quantity += quantity
+          holding.costBasis += costForThisPurchase
+        } else if (action === 'sell') {
+          const quantityToSell = Math.min(quantity, holding.quantity)
+          const avgCostPerShare = holding.quantity > 0 ? holding.costBasis / holding.quantity : 0
+          const soldCostBasis = quantityToSell * avgCostPerShare
+          holding.quantity -= quantityToSell
+          holding.costBasis = Math.max(0, holding.costBasis - soldCostBasis)
+
+          if (holding.quantity < 0.0001) {
+            holding.quantity = 0
+            holding.costBasis = 0
+          }
+        }
+
+        holdingsBySymbol.set(symbol, holding)
+      }
+
+      const totalHoldingsCostBasis = Array.from(holdingsBySymbol.values()).reduce(
+        (sum, holding) => sum + holding.costBasis,
+        0,
+      )
+      const totalMoney = runningCash + totalHoldingsCostBasis
+
+      labels.push(formatTimelineLabel(event.date, index))
+      moneyIHaveValues.push(Number(runningCash.toFixed(2)))
+      totalMoneyValues.push(Number(totalMoney.toFixed(2)))
+    })
+
+    console.log(
+      `[Timeline] Generated ${labels.length} data points | Cash range: ${moneyIHaveValues[0]} to ${moneyIHaveValues[moneyIHaveValues.length - 1]} | Total range: ${totalMoneyValues[0]} to ${totalMoneyValues[totalMoneyValues.length - 1]}`,
+    )
+
+    return { labels, moneyIHaveValues, totalMoneyValues }
+  }, [
+    moneyMoveData,
+    stocksData,
+    dividendData,
+    displayStocksData,
+    selectedCurrency,
+    currencyRates,
+  ])
+
+  const holdingsDonutChart = useMemo(() => {
+    const data = holdings
+      .map((holding, index) => {
+        const nowPriceUsd = quotesBySymbol[holding.symbol]
+        const priceUsd = Number.isFinite(nowPriceUsd) ? nowPriceUsd : holding.avgBuyPriceUsd
+        const priceInSelectedCurrency = convertAmount(
+          priceUsd,
+          'USD',
+          selectedCurrency,
+          currencyRates,
+        )
+
+        return {
+          id: index,
+          label: holding.symbol,
+          value: Number((priceInSelectedCurrency * holding.quantity).toFixed(2)),
+        }
+      })
+      .filter((item) => Number.isFinite(item.value) && item.value > 0)
+
+    return data
+  }, [holdings, quotesBySymbol, selectedCurrency, currencyRates])
+
+  const monthlyEarnChart = useMemo(() => {
+    const monthEarnMap = new Map<string, number>()
+
+    const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+    const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
+
+    if (stocksDateIndex !== -1 && profitLossIndex !== -1) {
+      displayStocksData.rows.forEach((row, rowIndex) => {
+        const profitLoss = parseNumber(row[profitLossIndex] ?? '')
+        const dateValue = parseDateValue(stocksData.rows[rowIndex]?.[stocksDateIndex] ?? '')
+
+        if (!Number.isFinite(profitLoss) || !dateValue) {
+          return
+        }
+
+        const rowCurrency = resolveCurrencyCode(stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '')
+        const normalizedProfitLoss = convertAmount(
+          profitLoss,
+          rowCurrency,
+          selectedCurrency,
+          currencyRates,
+        )
+
+        const monthKey = toMonthKey(dateValue)
+        monthEarnMap.set(monthKey, (monthEarnMap.get(monthKey) ?? 0) + normalizedProfitLoss)
+      })
+    }
+
+    const dividendAmountIndex = findColumnIndex(dividendData.headers, ['dividend', 'div', 'amount', 'value'])
+    const dividendDateIndex = findColumnIndex(dividendData.headers, ['date', 'time'])
+    const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+    if (dividendAmountIndex !== -1 && dividendDateIndex !== -1) {
+      dividendData.rows.forEach((row) => {
+        const amount = parseNumber(row[dividendAmountIndex] ?? '')
+        const dateValue = parseDateValue(row[dividendDateIndex] ?? '')
+
+        if (!Number.isFinite(amount) || !dateValue) {
+          return
+        }
+
+        const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+        const normalizedAmount = convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+
+        const monthKey = toMonthKey(dateValue)
+        monthEarnMap.set(monthKey, (monthEarnMap.get(monthKey) ?? 0) + normalizedAmount)
+      })
+    }
+
+    const labels = Array.from(monthEarnMap.keys()).sort((a, b) => a.localeCompare(b))
+    const values = labels.map((label) => Number((monthEarnMap.get(label) ?? 0).toFixed(2)))
+
+    return { labels, values }
+  }, [stocksData, displayStocksData, dividendData, selectedCurrency, currencyRates])
+
+  useEffect(() => {
+    if (!isConfigValid) {
+      setError(
+        'Missing required env vars in .env.local: VITE_SPREADSHEET_ID, VITE_STOCKS, VITE_DIVIDEND, VITE_MONEYMOVE',
+      )
+      setIsLoading(false)
+      return
+    }
+
+    const fetchSheet = async () => {
+      setIsLoading(true)
+      setError(null)
+
+      try {
+        const { stocks, dividend, moneyMove } = await fetchAllSheetsData(
+          spreadsheetId,
+          stocksGid,
+          dividendGid,
+          moneymoveGid,
+        )
+
+        setStocksData(stocks)
+        setDividendData(dividend)
+        setMoneyMoveData(moneyMove)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        setError(
+          `Failed to load one or more sheets. Ensure the sheet is shared publicly (or published to web). Details: ${message}`,
+        )
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    void fetchSheet()
+  }, [isConfigValid, spreadsheetId, stocksGid, dividendGid, moneymoveGid])
+
+  const renderSheetTable = (title: string, data: SheetData) => {
+    const shouldIncludeColumn = (header: string): boolean => {
+      const normalized = normalizeHeader(header)
+
+      if (title === 'Stocks') {
+        if (header.trim() === '%') {
+          return true
+        }
+
+        return [
+          'stock',
+          'symbol',
+          'ticker',
+          'currency',
+          'price',
+          'action',
+          'time',
+          'date',
+          'quantity',
+          'qty',
+          'handlingfee',
+          'handling',
+          'fee',
+          'profitloss',
+          'percent',
+        ].some((key) => normalized.includes(normalizeHeader(key)))
+      }
+
+      if (title === 'Dividend') {
+        return ['stock', 'symbol', 'ticker', 'currency', 'div', 'dividend', 'time', 'date'].some(
+          (key) => normalized.includes(normalizeHeader(key)),
+        )
+      }
+
+      if (title === 'Money Move') {
+        return ['name', 'currency', 'price', 'amount', 'time', 'date', 'do', 'action', 'type'].some(
+          (key) => normalized.includes(normalizeHeader(key)),
+        )
+      }
+
+      return true
+    }
+
+    const matchedColumnIndexes = data.headers
+      .map((header, index) => ({ header, index }))
+      .filter(({ header }) => shouldIncludeColumn(header))
+      .map(({ index }) => index)
+
+    const fallbackColumnIndexes = (() => {
+      if (title === 'Stocks') {
+        const stockDefaults = [0, 1, 2, 3, 4, 5, 6]
+        const derivedDefaults =
+          data.headers.length >= 2 ? [data.headers.length - 2, data.headers.length - 1] : []
+
+        return [...stockDefaults, ...derivedDefaults].filter(
+          (index, position, source) =>
+            index >= 0 && index < data.headers.length && source.indexOf(index) === position,
+        )
+      }
+
+      if (title === 'Dividend') {
+        return [0, 1, 2, 3].filter((index) => index < data.headers.length)
+      }
+
+      if (title === 'Money Move') {
+        return [0, 1, 2, 3, 4].filter((index) => index < data.headers.length)
+      }
+
+      return data.headers.map((_, index) => index)
+    })()
+
+    const visibleColumnIndexes =
+      matchedColumnIndexes.length > 0 ? matchedColumnIndexes : fallbackColumnIndexes
+
+    const formatCellValue = (value: string, header: string): string => {
+      const headerLower = header.toLowerCase()
+      const isDateColumn = headerLower.includes('date') || headerLower.includes('time')
+      
+      if (isDateColumn && value.trim()) {
+        const parsed = parseDateValue(value)
+        if (parsed) {
+          return formatDateDDMMYYYY(parsed)
+        }
+      }
+      
+      return value
+    }
+
+    return (
+      <Box className="sheet-section">
+        <h1 className="sheet-title text-black">{title}</h1>
+        <TableContainer component={Paper} elevation={0} className="table-shell">
+          <Table size="small" aria-label={`${title.toLowerCase()} table`}>
+            <TableHead>
+              <TableRow>
+                {visibleColumnIndexes.map((headerIndex) => (
+                  <TableCell key={`${title}-header-${headerIndex}`} sx={{ fontWeight: 700 }}>
+                    {data.headers[headerIndex]}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {data.rows.map((row, rowIndex) => (
+                <TableRow key={`${title}-${rowIndex}-${row.join('-')}`}>
+                  {visibleColumnIndexes.map((colIndex) => (
+                    <TableCell key={`${title}-${rowIndex}-${colIndex}`}>
+                      {formatCellValue(row[colIndex] ?? '', data.headers[colIndex] ?? '')}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Box>
+    )
+  }
+
+  return (
+    <main className="page">
+      <header className="page-header">
+        <div className="page-nav">
+          <Button
+            variant={page === 'dataShow' ? 'contained' : 'outlined'}
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)', 
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&.MuiButton-contained': {
+              backgroundColor: 'var(--special)',
+              color: 'var(--text)',
+              '&:hover': {
+                borderColor: 'var(--accent)',
+                opacity: 0.92,
+                },
+              }
+            }}
+            onClick={() => setPage('dataShow')}
+          >
+            <MdDataUsage size={20} />
+          </Button>
+          <Button 
+            variant={page === 'table' ? 'contained' : 'outlined'} 
+            sx={{
+                width: 40,
+                minWidth: 40,
+                height: 40,
+                padding: 0,
+                borderRadius: '50%',
+                backgroundColor: 'var(--bg)', 
+                color: 'var(--wbg)',
+                borderColor: 'var(--wbg)',
+                '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                  },
+                }
+              }}
+            onClick={() => setPage('table')}
+          >
+            <MdTableRows size={20} />
+          </Button>
+        </div>
+        <Autocomplete
+          className="currency-picker"
+          sx={{
+            '& .MuiOutlinedInput-root': {
+            borderRadius: '14px',
+            borderColor: 'var(--special)',
+            // backgroundColor: 'var(--bg)',
+            color: 'var(--text)',
+            '& fieldset': { borderColor: 'var(--wbg)', color: 'var(--wbg)' },
+            '&:hover fieldset': { borderColor: 'var(--wbg)', opacity: 0.92},
+            '&.Mui-focused fieldset': { borderColor: 'var(--special)', borderWidth: '1px', color: 'var(--text)' },
+            },
+            '& .MuiInputLabel-root': { color: 'var(--wbg)' },
+            '& .MuiInputLabel-root.Mui-focused': { color: 'var(--special)' },
+            '& .MuiSvgIcon-root': { color: 'var(--text)' },
+          }}
+          size="small"
+          disableClearable
+          options={[...CURRENCY_OPTIONS]}
+          value={selectedCurrency}
+          onChange={(_, value) => setSelectedCurrency(value)}
+          renderInput={(params) => <TextField {...params} label="Currency" />}
+        />
+      </header>
+
+
+      {isLoading ? (
+        <div className="state-block" role="status" aria-live="polite">
+          <CircularProgress size={28} />
+          <span>Loading...</span>
+        </div>
+        ) : error ? (
+          <Alert severity="error">{error}</Alert>
+        ) : (
+          page === 'table' ? (
+          <>
+            {renderSheetTable('Stocks', displayStocksData)}
+            {renderSheetTable('Dividend', dividendData)}
+            {renderSheetTable('Money Move', moneyMoveData)}
+          </>
+          ) : page === 'dataShow' ? (
+            <Box className="dashboard-layout">
+              <section className="summary-grid" aria-label="Portfolio summary">
+                <Box className="summary-card">
+                  <p className="summary-label">Total</p>
+                  <p className="summary-value">{formatCurrency(summary.totalMoney, selectedCurrency)}</p>
+                </Box>
+                <Box className="summary-card">
+                  <p className="summary-label">Borrowed</p>
+                  <p className="summary-value">{formatCurrency(summary.borrowed, selectedCurrency)}</p>
+                </Box>
+                <Box className="summary-card">
+                  <p className="summary-label">Dividend</p>
+                  <p className="summary-value">{formatCurrency(summary.dividendTotal, selectedCurrency)}</p>
+                </Box>
+                <Box className="summary-card summary-card-earn">
+                  <p className="summary-label">Earn (All / Per Trade)</p>
+                  <p className="summary-value">
+                    {formatCurrency(summary.earnAll, selectedCurrency)} / {formatCurrency(summary.earnPerTrade, selectedCurrency)}
+                  </p>
+                </Box>
+                <Box className="summary-card">
+                  <p className="summary-label">% (Average)</p>
+                  <p className="summary-value">{formatPercent(summary.percentAverage)}</p>
+                </Box>
+              </section>
+
+              <Box className="chart-card chart-card-timeline">
+                <h2 className="chart-title">Money Timeline (Total vs Working Capital)</h2>
+                <div className="chart-canvas">
+                  {moneyTimelineChart.labels.length === 0 ? (
+                    <p className="chart-empty">No timeline data available to display.</p>
+                  ) : (
+                    <LineChart
+                      height={300}
+                      series={[
+                        {
+                          data: moneyTimelineChart.totalMoneyValues,
+                          label: 'Total Money',
+                          showMark: false,
+                        },
+                        {
+                          data: moneyTimelineChart.moneyIHaveValues,
+                          label: 'Money I Have',
+                          showMark: false,
+                        },
+                      ]}
+                      xAxis={[
+                        {
+                          scaleType: 'point',
+                          data: moneyTimelineChart.labels,
+                          valueFormatter: (value, context) =>
+                            context.location === 'tick'
+                              ? formatCompactAxisDate(String(value))
+                              : String(value),
+                        }
+                      ]}
+                    />
+                  )}
+                </div>
+              </Box>
+
+              <Box className="chart-card chart-card-allocation">
+                <h2 className="chart-title">Current Holdings Allocation</h2>
+                <div className="chart-canvas chart-canvas-center">
+                  {holdingsDonutChart.length === 0 ? (
+                    <p className="chart-empty">No holdings allocation data available.</p>
+                  ) : (
+                    <PieChart
+                      height={230}
+                      width={300}
+                      series={[
+                        {
+                          innerRadius: 65,
+                          outerRadius: 110,
+                          paddingAngle: 2,
+                          cornerRadius: 4,
+                          data: holdingsDonutChart,
+                        },
+                      ]}
+                    />
+                  )}
+                </div>
+              </Box>
+
+              <Box className="chart-card chart-card-monthly">
+                <h2 className="chart-title">Monthly Earn / Loss</h2>
+                <div className="chart-canvas">
+                  {monthlyEarnChart.labels.length === 0 ? (
+                    <p className="chart-empty">No monthly earn/loss data available.</p>
+                  ) : (
+                    <BarChart
+                      height={280}
+                      xAxis={[
+                        {
+                          scaleType: 'band',
+                          data: monthlyEarnChart.labels.map((label) => formatMonthLabel(label)),
+                        },
+                      ]}
+                      yAxis={[
+                        {
+                          label: `Earn / Loss (${selectedCurrency})`,
+                        },
+                      ]}
+                      series={[
+                        {
+                          label: 'Earn / Loss',
+                          color: '#16a34a',
+                          data: monthlyEarnChart.values,
+                        },
+                      ]}
+                    />
+                  )}
+                </div>
+              </Box>
+
+
+              <Box className="sheet-section dashboard-holdings">
+                <div className="holdings-header">
+                  <h1 className="sheet-title text-black">Current Holdings (US)</h1>
+                  <p className="holdings-status">
+                    {isUsMarketOpen === true
+                      ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
+                      : isUsMarketOpen === false
+                        ? 'Market Closed'
+                        : 'Market Status Unknown'}
+                    {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
+                  </p>
+                </div>
+
+                <TableContainer component={Paper} elevation={0} className="table-shell">
+                  <Table size="small" aria-label="current holdings table">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 700 }}>Stock Name/Number</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Quantity</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Now Price</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Buy In Price</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>$ Earn/Loss</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>% Change</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {holdings.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6}>No current holdings found.</TableCell>
+                        </TableRow>
+                      ) : (
+                        holdings.map((holding) => {
+                          const nowPriceUsd = quotesBySymbol[holding.symbol]
+                          const nowPrice = Number.isFinite(nowPriceUsd)
+                            ? convertAmount(nowPriceUsd, 'USD', selectedCurrency, currencyRates)
+                            : Number.NaN
+                          const buyInPrice = convertAmount(
+                            holding.avgBuyPriceUsd,
+                            'USD',
+                            selectedCurrency,
+                            currencyRates,
+                          )
+
+                          const earnLoss = Number.isFinite(nowPrice)
+                            ? (nowPrice - buyInPrice) * holding.quantity
+                            : Number.NaN
+                          const changePercent = buyInPrice > 0 && Number.isFinite(nowPrice)
+                            ? ((nowPrice - buyInPrice) / buyInPrice) * 100
+                            : Number.NaN
+
+                          return (
+                            <TableRow key={holding.symbol}>
+                              <TableCell>{holding.displayName}</TableCell>
+                              <TableCell>{holding.quantity.toFixed(2)}</TableCell>
+                              <TableCell>
+                                {Number.isFinite(nowPrice)
+                                  ? formatCurrency(nowPrice, selectedCurrency)
+                                  : '-'}
+                              </TableCell>
+                              <TableCell>{formatCurrency(buyInPrice, selectedCurrency)}</TableCell>
+                              <TableCell
+                                className={
+                                  Number.isFinite(earnLoss)
+                                    ? earnLoss >= 0
+                                      ? 'value-positive'
+                                      : 'value-negative'
+                                    : undefined
+                                }
+                              >
+                                {Number.isFinite(earnLoss)
+                                  ? formatCurrency(earnLoss, selectedCurrency)
+                                  : '-'}
+                              </TableCell>
+                              <TableCell
+                                className={
+                                  Number.isFinite(changePercent)
+                                    ? changePercent >= 0
+                                      ? 'value-positive'
+                                      : 'value-negative'
+                                    : undefined
+                                }
+                              >
+                                {Number.isFinite(changePercent) ? formatPercent(changePercent) : '-'}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            </Box>
+          ) : null
+        ) 
+      }
+
+      {!isLoading &&
+        !error &&
+        displayStocksData.rows.length === 0 &&
+        dividendData.rows.length === 0 &&
+        moneyMoveData.rows.length === 0 &&
+        <Alert severity="info">No rows found in the sheets.</Alert>}
+    </main>
+  )
+}
+
+export default App
