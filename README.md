@@ -74,3 +74,54 @@ export default defineConfig([
 ])
 ```
 # stock
+
+## Enable Add Row (Google Sheets Append API)
+
+The Add page posts to `VITE_SHEETS_APPEND_ENDPOINT`. This project now includes a local API server using `spreadsheets.values.append`.
+
+### 1. Configure env
+
+Copy `.env.example` to `.env.local` and fill values:
+
+- `VITE_SHEETS_APPEND_ENDPOINT=http://localhost:8787/api/sheets/append`
+- `SPREADSHEET_ID` (or `VITE_SPREADSHEET_ID`)
+- Google credentials:
+  - `GOOGLE_APPLICATION_CREDENTIALS=./credentials.json` (recommended), or
+  - `GOOGLE_SERVICE_ACCOUNT_KEY_JSON=...`
+
+Default ranges:
+
+- `SHEET_RANGE_STOCKS=Stocks!A:G`
+- `SHEET_RANGE_DIVIDEND=Dividend!A:D`
+- `SHEET_RANGE_MONEY_MOVE=Money Move!A:E`
+
+### 2. Run frontend and API
+
+In two terminals:
+
+```bash
+npm run dev
+```
+
+```bash
+npm run server
+```
+
+Append endpoint health check:
+
+```bash
+curl http://localhost:8787/health
+```
+
+### 3. Notes
+
+- Service account must have access to the target spreadsheet.
+- `valueInputOption` is `USER_ENTERED`.
+- Rows are appended via `POST /api/sheets/append` with body:
+
+```json
+{
+  "table": "Stocks | Dividend | Money Move",
+  "row": { "...": "..." }
+}
+```

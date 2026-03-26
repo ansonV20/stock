@@ -179,6 +179,160 @@
   color: var(--accent);
 }
 
+.add-layout {
+  width: 100%;
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* gap: 18px; */
+}
+
+.add-divider {
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.add-form-card {
+  border-radius: 20px !important;
+  border-top-left-radius: 0px !important;
+  min-height: 500px;
+  padding: 18px;
+  background: var(--text) !important;
+  display: flex;
+}
+
+.add-form-grid {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100%;
+  gap: 12px;
+}
+
+.add-form-pair-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: 12px;
+}
+
+.add-form-triple-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr) minmax(0, 0.8fr);
+  gap: 12px;
+}
+
+.add-form-name-do-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.6fr);
+  gap: 12px;
+}
+
+.add-form-pair-row .add-field-currency {
+  min-width: 0;
+}
+
+.add-form-pair-row .add-field-value {
+  min-width: 0;
+}
+
+.add-form-triple-row .add-field-stock,
+.add-form-triple-row .add-field-action,
+.add-form-triple-row .add-field-quantity,
+.add-form-name-do-row .add-field-name,
+.add-form-name-do-row .add-field-do {
+  min-width: 0;
+}
+
+.add-table-switcher {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+
+.add-table-label {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.add-table-button.MuiButton-root {
+  padding: 0;
+  min-width: 0;
+  color: var(--bg);
+  text-transform: none;
+  font-size: 2rem;
+  line-height: 1.2;
+  font-weight: 700;
+  justify-content: flex-start;
+}
+
+.add-table-button.MuiButton-root:hover {
+  background: transparent;
+  opacity: 0.75;
+}
+
+.add-table-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+.add-form-grid .MuiInputBase-root,
+.add-form-grid .MuiInputLabel-root,
+.add-form-grid .MuiSvgIcon-root {
+  color: var(--bg);
+}
+
+.add-form-grid .MuiOutlinedInput-notchedOutline {
+  border-color: var(--accent-border);
+}
+
+.add-form-grid .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: var(--accent);
+}
+
+.add-form-grid .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: var(--accent);
+}
+
+.add-form-grid .MuiInputLabel-root.Mui-focused {
+  color: var(--accent);
+}
+
+.add-form-actions {
+  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.add-form-actions .MuiButton-root {
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--text);
+  text-transform: none;
+  font-weight: 700;
+  padding-inline: 18px;
+}
+
+.add-form-actions .MuiButton-root:hover {
+  opacity: 0.9;
+}
+
+.add-form-actions .MuiButton-root.is-confirming {
+  background: var(--special);
+}
+
+.add-form-grid .MuiAlert-root {
+  grid-column: 1 / -1;
+}
+
 
 @media (max-width: 1024px) {
   .dashboard-layout {
@@ -217,6 +371,10 @@
   }
 
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .add-form-grid {
     grid-template-columns: 1fr;
   }
 

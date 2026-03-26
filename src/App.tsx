@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Alert from '@mui/material/Alert'
 import CircularProgress from '@mui/material/CircularProgress'
+import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Table from '@mui/material/Table'
 import TableBody from '@mui/material/TableBody'
@@ -18,7 +19,7 @@ import {
   type SheetData,
 } from './sheetsData'
 import { Box, Button } from '@mui/material'
-import { MdDataUsage, MdTableRows } from 'react-icons/md'
+import { MdDataUsage, MdTableRows, MdOutlineAdd } from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
 import { BarChart } from '@mui/x-charts/BarChart'
@@ -60,6 +61,94 @@ const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i
 const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
 const HOLDINGS_UPDATE_INTERVAL_MS = 10 * 60 * 1000
+
+type AddTableName = 'Stocks' | 'Dividend' | 'Money Move'
+
+type AddFieldConfig = {
+  key: string
+  label: string
+  inputType: 'text' | 'number' | 'datetime' | 'select'
+  required?: boolean
+  options?: string[]
+  step?: string
+  defaultValue?: string
+}
+
+const ADD_TABLE_OPTIONS: AddTableName[] = ['Stocks', 'Dividend', 'Money Move']
+
+const ADD_FORM_CONFIG: Record<AddTableName, AddFieldConfig[]> = {
+  Stocks: [
+    { key: 'stock', label: 'Stock', inputType: 'text', required: true },
+    {
+      key: 'currency',
+      label: 'Currency',
+      inputType: 'select',
+      options: [...CURRENCY_OPTIONS],
+      required: true,
+      defaultValue: 'USD',
+    },
+    { key: 'price', label: 'Price', inputType: 'number', step: '0.01', required: true },
+    {
+      key: 'action',
+      label: 'Action',
+      inputType: 'select',
+      options: ['Buy', 'Sell'],
+      required: true,
+      defaultValue: 'Buy',
+    },
+    { key: 'time', label: 'Time', inputType: 'datetime', required: true },
+    { key: 'quantity', label: 'Quantity', inputType: 'number', step: '1', required: true },
+    {
+      key: 'handlingFees',
+      label: 'Handiling Fees',
+      inputType: 'number',
+      step: '0.01',
+      required: true,
+      defaultValue: '0',
+    },
+  ],
+  Dividend: [
+    { key: 'stock', label: 'Stock', inputType: 'text', required: true },
+    {
+      key: 'currency',
+      label: 'Currency',
+      inputType: 'select',
+      options: [...CURRENCY_OPTIONS],
+      required: true,
+      defaultValue: 'USD',
+    },
+    { key: 'div', label: 'Div', inputType: 'number', step: '0.01', required: true },
+    { key: 'time', label: 'Time', inputType: 'datetime', required: true },
+  ],
+  'Money Move': [
+    { key: 'name', label: 'Name', inputType: 'text', required: true },
+    {
+      key: 'currency',
+      label: 'Currency',
+      inputType: 'select',
+      options: [...CURRENCY_OPTIONS],
+      required: true,
+      defaultValue: 'USD',
+    },
+    { key: 'price', label: 'Price', inputType: 'number', step: '0.01', required: true },
+    { key: 'time', label: 'Time', inputType: 'datetime', required: true },
+    {
+      key: 'do',
+      label: 'Do',
+      inputType: 'select',
+      options: ['In', 'Out', 'Bor', 'Back'],
+      required: true,
+      defaultValue: 'In',
+    },
+  ],
+}
+
+function getDefaultFormValues(table: AddTableName): Record<string, string> {
+  return ADD_FORM_CONFIG[table].reduce<Record<string, string>>((acc, field) => {
+    acc[field.key] = field.defaultValue ?? ''
+    return acc
+  }, {})
+}
 
 function normalizeHeader(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -223,18 +312,26 @@ function App() {
   const [moneyMoveData, setMoneyMoveData] = useState<SheetData>({ headers: [], rows: [] })
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [page, setPage] = useState<'table' | 'dataShow'>('dataShow')
+  const [page, setPage] = useState<'table' | 'dataShow' | 'add'>('dataShow')
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD')
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
   const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
   const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = useState(false)
   const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
+  const [selectedAddTable, setSelectedAddTable] = useState<AddTableName>('Stocks')
+  const [addFormValues, setAddFormValues] = useState<Record<string, string>>(
+    getDefaultFormValues('Stocks'),
+  )
+  const [isConfirmingAdd, setIsConfirmingAdd] = useState(false)
+  const [isSubmittingAdd, setIsSubmittingAdd] = useState(false)
+  const [addFormMessage, setAddFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const spreadsheetId = import.meta.env.VITE_SPREADSHEET_ID
   const stocksGid = import.meta.env.VITE_STOCKS
   const dividendGid = import.meta.env.VITE_DIVIDEND
   const moneymoveGid = import.meta.env.VITE_MONEYMOVE
+  const appendEndpoint = import.meta.env.VITE_SHEETS_APPEND_ENDPOINT?.trim() ?? ''
 
   const isConfigValid = useMemo(
     () =>
@@ -248,6 +345,137 @@ function App() {
   )
 
   const displayStocksData = useMemo(() => enrichStocksWithProfitLoss(stocksData), [stocksData])
+  const selectedAddFields = useMemo(() => ADD_FORM_CONFIG[selectedAddTable], [selectedAddTable])
+
+  useEffect(() => {
+    setAddFormValues(getDefaultFormValues(selectedAddTable))
+    setIsConfirmingAdd(false)
+    setAddFormMessage(null)
+  }, [selectedAddTable])
+
+  const handleAddFieldChange = (fieldKey: string, value: string) => {
+    setIsConfirmingAdd(false)
+    setAddFormValues((prev) => ({ ...prev, [fieldKey]: value }))
+  }
+
+  const handleCycleAddTable = () => {
+    setSelectedAddTable((prev) => {
+      const currentIndex = ADD_TABLE_OPTIONS.indexOf(prev)
+      const nextIndex = (currentIndex + 1) % ADD_TABLE_OPTIONS.length
+      return ADD_TABLE_OPTIONS[nextIndex]
+    })
+  }
+
+  const renderAddField = (field: AddFieldConfig, className?: string) => {
+    if (field.inputType === 'select') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          select
+          variant="standard"
+          label={field.label}
+          required={Boolean(field.required)}
+          value={addFormValues[field.key] ?? ''}
+          onChange={(event) => handleAddFieldChange(field.key, event.target.value)}
+        >
+          {(field.options ?? []).map((option) => (
+            <MenuItem key={`${field.key}-${option}`} value={option}>
+              {option}
+            </MenuItem>
+          ))}
+        </TextField>
+      )
+    }
+
+    if (field.inputType === 'datetime') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          label={field.label}
+          type="datetime-local"
+          variant="standard"
+          required={Boolean(field.required)}
+          value={addFormValues[field.key] ?? ''}
+          onChange={(event) => handleAddFieldChange(field.key, event.target.value)}
+          InputLabelProps={{ shrink: true }}
+        />
+      )
+    }
+
+    return (
+      <TextField
+        key={field.key}
+        className={className}
+        label={field.label}
+        type={field.inputType === 'number' ? 'number' : 'text'}
+        variant="standard"
+        required={Boolean(field.required)}
+        value={addFormValues[field.key] ?? ''}
+        onChange={(event) => handleAddFieldChange(field.key, event.target.value)}
+        inputProps={field.inputType === 'number' && field.step ? { step: field.step } : undefined}
+      />
+    )
+  }
+
+  const handleSubmitAdd = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAddFormMessage(null)
+
+    if (!isConfirmingAdd) {
+      setIsConfirmingAdd(true)
+      return
+    }
+
+    const missingRequiredLabel = selectedAddFields.find(
+      (field) => field.required && !(addFormValues[field.key] ?? '').trim(),
+    )?.label
+
+    if (missingRequiredLabel) {
+      setIsConfirmingAdd(false)
+      setAddFormMessage({ type: 'error', text: `${missingRequiredLabel} is required.` })
+      return
+    }
+
+    if (!appendEndpoint) {
+      setIsConfirmingAdd(false)
+      setAddFormMessage({
+        type: 'error',
+        text: 'Missing VITE_SHEETS_APPEND_ENDPOINT. Add it in your .env to enable row creation.',
+      })
+      return
+    }
+
+    setIsSubmittingAdd(true)
+
+    try {
+      const payload = {
+        table: selectedAddTable,
+        row: addFormValues,
+      }
+
+      const response = await fetch(appendEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Append request failed with status ${response.status}`)
+      }
+
+      setAddFormValues(getDefaultFormValues(selectedAddTable))
+      setIsConfirmingAdd(false)
+      setAddFormMessage({ type: 'success', text: `Added new row to ${selectedAddTable}.` })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      setAddFormMessage({ type: 'error', text: `Unable to append row. ${message}` })
+    } finally {
+      setIsConfirmingAdd(false)
+      setIsSubmittingAdd(false)
+    }
+  }
 
   const holdings = useMemo<HoldingSnapshot[]>(() => {
     const symbolIndex = findColumnIndex(stocksData.headers, [
@@ -1243,6 +1471,30 @@ function App() {
           >
             <MdTableRows size={20} />
           </Button>
+          <Button
+            variant={page === 'add' ? 'contained' : 'outlined'}
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                },
+              },
+            }}
+            onClick={() => setPage('add')}
+          >
+            <MdOutlineAdd size={20} />
+          </Button>
         </div>
         <Autocomplete
           className="currency-picker"
@@ -1493,6 +1745,94 @@ function App() {
                   </Table>
                 </TableContainer>
               </Box>
+            </Box>
+          ) : page === 'add' ? (
+            <Box className="add-layout">
+              <h1 className='sheet-title text-black'>Add data</h1>
+
+              <Paper elevation={0} className="add-form-card">
+                <Box component="form" className="add-form-grid" onSubmit={handleSubmitAdd}>
+                  <Box className="add-table-switcher" role="group" aria-label="Choose table">
+                    {/* <p className="add-table-label">Table</p> */}
+                    <Button
+                      type="button"
+                      className="add-table-button"
+                      variant="text"
+                      onClick={handleCycleAddTable}
+                    >
+                      {selectedAddTable}
+                    </Button>
+                  </Box>
+
+                  {selectedAddFields.map((field) => {
+                    const pairedFieldKey = selectedAddTable === 'Dividend' ? 'div' : 'price'
+
+                    if (selectedAddTable === 'Stocks' && field.key === 'stock') {
+                      const actionField = selectedAddFields.find((candidate) => candidate.key === 'action')
+                      const quantityField = selectedAddFields.find((candidate) => candidate.key === 'quantity')
+
+                      return (
+                        <Box className="add-form-triple-row" key="stocks-main-row">
+                          {renderAddField(field, 'add-field-stock')}
+                          {actionField ? renderAddField(actionField, 'add-field-action') : null}
+                          {quantityField ? renderAddField(quantityField, 'add-field-quantity') : null}
+                        </Box>
+                      )
+                    }
+
+                    if (selectedAddTable === 'Stocks' && (field.key === 'action' || field.key === 'quantity')) {
+                      return null
+                    }
+
+                    if (selectedAddTable === 'Money Move' && field.key === 'name') {
+                      const doField = selectedAddFields.find((candidate) => candidate.key === 'do')
+
+                      return (
+                        <Box className="add-form-name-do-row" key="money-move-name-do-row">
+                          {renderAddField(field, 'add-field-name')}
+                          {doField ? renderAddField(doField, 'add-field-do') : null}
+                        </Box>
+                      )
+                    }
+
+                    if (selectedAddTable === 'Money Move' && field.key === 'do') {
+                      return null
+                    }
+
+                    if (field.key === pairedFieldKey) {
+                      return null
+                    }
+
+                    if (field.key === 'currency') {
+                      const pairedField = selectedAddFields.find((candidate) => candidate.key === pairedFieldKey)
+
+                      return (
+                        <Box className="add-form-pair-row" key={`pair-${selectedAddTable}-${pairedFieldKey}`}>
+                          {renderAddField(field, 'add-field-currency')}
+                          {pairedField ? renderAddField(pairedField, 'add-field-value') : null}
+                        </Box>
+                      )
+                    }
+
+                    return renderAddField(field)
+                  })}
+
+                  <Box className="add-form-actions">
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      disabled={isSubmittingAdd}
+                      className={isConfirmingAdd ? 'is-confirming' : ''}
+                    >
+                      {isSubmittingAdd ? 'Adding...' : isConfirmingAdd ? 'Conform' : 'Add Row'}
+                    </Button>
+                  </Box>
+
+                  {addFormMessage ? (
+                    <Alert severity={addFormMessage.type}>{addFormMessage.text}</Alert>
+                  ) : null}
+                </Box>
+              </Paper>
             </Box>
           ) : null
         ) 

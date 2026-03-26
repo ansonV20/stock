@@ -5,6 +5,7 @@ interface ImportMetaEnv {
   readonly VITE_STOCKS: string
   readonly VITE_DIVIDEND: string
   readonly VITE_MONEYMOVE: string
+  readonly VITE_SHEETS_APPEND_ENDPOINT?: string
 }
 
 interface ImportMeta {
