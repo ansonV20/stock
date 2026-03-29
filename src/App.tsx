@@ -326,9 +326,9 @@ function App() {
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD')
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
   const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
-  const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
-  const [isQuoteLoading, setIsQuoteLoading] = useState(false)
-  const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
+  // const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
+  // const [isQuoteLoading, setIsQuoteLoading] = useState(false)
+  // const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
   const [selectedAddTable, setSelectedAddTable] = useState<AddTableName>('Stocks')
   const [addFormValues, setAddFormValues] = useState<Record<string, string>>(
     getDefaultFormValues('Stocks'),
@@ -962,94 +962,94 @@ function App() {
     void loadCurrencyRates()
   }, [])
 
-  useEffect(() => {
-    if (!FINNHUB_TOKEN || holdings.length === 0) {
-      setIsQuoteLoading(false)
-      return
-    }
+  // useEffect(() => {
+  //   if (!FINNHUB_TOKEN || holdings.length === 0) {
+  //     setIsQuoteLoading(false)
+  //     return
+  //   }
 
-    let isCancelled = false
+  //   let isCancelled = false
 
-    const fetchHoldingsQuotes = async () => {
-      setIsQuoteLoading(true)
+  //   const fetchHoldingsQuotes = async () => {
+  //     setIsQuoteLoading(true)
 
-      try {
-        const marketStatusResponse = await fetch(
-          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
-        )
+  //     try {
+  //       const marketStatusResponse = await fetch(
+  //         `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
+  //       )
 
-        if (!marketStatusResponse.ok) {
-          if (!isCancelled) {
-            setIsUsMarketOpen(null)
-          }
-          return
-        }
+  //       if (!marketStatusResponse.ok) {
+  //         if (!isCancelled) {
+  //           setIsUsMarketOpen(null)
+  //         }
+  //         return
+  //       }
 
-        const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
-        const marketOpen = marketStatus.isOpen === true
+  //       const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
+  //       const marketOpen = marketStatus.isOpen === true
 
-        if (!isCancelled) {
-          setIsUsMarketOpen(marketOpen)
-        }
+  //       if (!isCancelled) {
+  //         setIsUsMarketOpen(marketOpen)
+  //       }
 
-        if (!marketOpen) {
-          return
-        }
+  //       if (!marketOpen) {
+  //         return
+  //       }
 
-        const quoteResults = await Promise.all(
-          holdings.map(async (holding) => {
-            const quoteResponse = await fetch(
-              `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
-            )
+  //       const quoteResults = await Promise.all(
+  //         holdings.map(async (holding) => {
+  //           const quoteResponse = await fetch(
+  //             `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
+  //           )
 
-            if (!quoteResponse.ok) {
-              return [holding.symbol, Number.NaN] as const
-            }
+  //           if (!quoteResponse.ok) {
+  //             return [holding.symbol, Number.NaN] as const
+  //           }
 
-            const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
-            const currentPrice = quote.c
+  //           const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
+  //           const currentPrice = quote.c
 
-            return [
-              holding.symbol,
-              typeof currentPrice === 'number' && Number.isFinite(currentPrice)
-                ? currentPrice
-                : Number.NaN,
-            ] as const
-          }),
-        )
+  //           return [
+  //             holding.symbol,
+  //             typeof currentPrice === 'number' && Number.isFinite(currentPrice)
+  //               ? currentPrice
+  //               : Number.NaN,
+  //           ] as const
+  //         }),
+  //       )
 
-        if (isCancelled) {
-          return
-        }
+  //       if (isCancelled) {
+  //         return
+  //       }
 
-        const nextQuotes: Record<string, number> = {}
-        quoteResults.forEach(([symbol, price]) => {
-          if (Number.isFinite(price)) {
-            nextQuotes[symbol] = price
-          }
-        })
+  //       const nextQuotes: Record<string, number> = {}
+  //       quoteResults.forEach(([symbol, price]) => {
+  //         if (Number.isFinite(price)) {
+  //           nextQuotes[symbol] = price
+  //         }
+  //       })
 
-        setQuotesBySymbol(nextQuotes)
-        setQuoteUpdatedAt(Date.now())
-      } catch {
-        if (!isCancelled) {
-          setIsUsMarketOpen(null)
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsQuoteLoading(false)
-        }
-      }
-    }
+  //       setQuotesBySymbol(nextQuotes)
+  //       setQuoteUpdatedAt(Date.now())
+  //     } catch {
+  //       if (!isCancelled) {
+  //         setIsUsMarketOpen(null)
+  //       }
+  //     } finally {
+  //       if (!isCancelled) {
+  //         setIsQuoteLoading(false)
+  //       }
+  //     }
+  //   }
 
-    void fetchHoldingsQuotes()
-    const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
+  //   void fetchHoldingsQuotes()
+  //   const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
 
-    return () => {
-      isCancelled = true
-      window.clearInterval(timer)
-    }
-  }, [holdings])
+  //   return () => {
+  //     isCancelled = true
+  //     window.clearInterval(timer)
+  //   }
+  // }, [holdings])
 
   const summary = useMemo(() => {
     const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
