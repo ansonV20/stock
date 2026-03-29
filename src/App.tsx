@@ -326,9 +326,9 @@ function App() {
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD')
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
   const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
-  // const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
-  // const [isQuoteLoading, setIsQuoteLoading] = useState(false)
-  // const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
+  const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
+  const [isQuoteLoading, setIsQuoteLoading] = useState(false)
+  const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
   const [selectedAddTable, setSelectedAddTable] = useState<AddTableName>('Stocks')
   const [addFormValues, setAddFormValues] = useState<Record<string, string>>(
     getDefaultFormValues('Stocks'),
@@ -962,94 +962,94 @@ function App() {
     void loadCurrencyRates()
   }, [])
 
-  // useEffect(() => {
-  //   if (!FINNHUB_TOKEN || holdings.length === 0) {
-  //     setIsQuoteLoading(false)
-  //     return
-  //   }
+  useEffect(() => {
+    if (!FINNHUB_TOKEN || holdings.length === 0) {
+      setIsQuoteLoading(false)
+      return
+    }
 
-  //   let isCancelled = false
+    let isCancelled = false
 
-  //   const fetchHoldingsQuotes = async () => {
-  //     setIsQuoteLoading(true)
+    const fetchHoldingsQuotes = async () => {
+      setIsQuoteLoading(true)
 
-  //     try {
-  //       const marketStatusResponse = await fetch(
-  //         `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
-  //       )
+      try {
+        const marketStatusResponse = await fetch(
+          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
+        )
 
-  //       if (!marketStatusResponse.ok) {
-  //         if (!isCancelled) {
-  //           setIsUsMarketOpen(null)
-  //         }
-  //         return
-  //       }
+        if (!marketStatusResponse.ok) {
+          if (!isCancelled) {
+            setIsUsMarketOpen(null)
+          }
+          return
+        }
 
-  //       const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
-  //       const marketOpen = marketStatus.isOpen === true
+        const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
+        const marketOpen = marketStatus.isOpen === true
 
-  //       if (!isCancelled) {
-  //         setIsUsMarketOpen(marketOpen)
-  //       }
+        if (!isCancelled) {
+          setIsUsMarketOpen(marketOpen)
+        }
 
-  //       if (!marketOpen) {
-  //         return
-  //       }
+        if (!marketOpen) {
+          return
+        }
 
-  //       const quoteResults = await Promise.all(
-  //         holdings.map(async (holding) => {
-  //           const quoteResponse = await fetch(
-  //             `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
-  //           )
+        const quoteResults = await Promise.all(
+          holdings.map(async (holding) => {
+            const quoteResponse = await fetch(
+              `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
+            )
 
-  //           if (!quoteResponse.ok) {
-  //             return [holding.symbol, Number.NaN] as const
-  //           }
+            if (!quoteResponse.ok) {
+              return [holding.symbol, Number.NaN] as const
+            }
 
-  //           const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
-  //           const currentPrice = quote.c
+            const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
+            const currentPrice = quote.c
 
-  //           return [
-  //             holding.symbol,
-  //             typeof currentPrice === 'number' && Number.isFinite(currentPrice)
-  //               ? currentPrice
-  //               : Number.NaN,
-  //           ] as const
-  //         }),
-  //       )
+            return [
+              holding.symbol,
+              typeof currentPrice === 'number' && Number.isFinite(currentPrice)
+                ? currentPrice
+                : Number.NaN,
+            ] as const
+          }),
+        )
 
-  //       if (isCancelled) {
-  //         return
-  //       }
+        if (isCancelled) {
+          return
+        }
 
-  //       const nextQuotes: Record<string, number> = {}
-  //       quoteResults.forEach(([symbol, price]) => {
-  //         if (Number.isFinite(price)) {
-  //           nextQuotes[symbol] = price
-  //         }
-  //       })
+        const nextQuotes: Record<string, number> = {}
+        quoteResults.forEach(([symbol, price]) => {
+          if (Number.isFinite(price)) {
+            nextQuotes[symbol] = price
+          }
+        })
 
-  //       setQuotesBySymbol(nextQuotes)
-  //       setQuoteUpdatedAt(Date.now())
-  //     } catch {
-  //       if (!isCancelled) {
-  //         setIsUsMarketOpen(null)
-  //       }
-  //     } finally {
-  //       if (!isCancelled) {
-  //         setIsQuoteLoading(false)
-  //       }
-  //     }
-  //   }
+        setQuotesBySymbol(nextQuotes)
+        setQuoteUpdatedAt(Date.now())
+      } catch {
+        if (!isCancelled) {
+          setIsUsMarketOpen(null)
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsQuoteLoading(false)
+        }
+      }
+    }
 
-  //   void fetchHoldingsQuotes()
-  //   const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
+    void fetchHoldingsQuotes()
+    const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
 
-  //   return () => {
-  //     isCancelled = true
-  //     window.clearInterval(timer)
-  //   }
-  // }, [holdings])
+    return () => {
+      isCancelled = true
+      window.clearInterval(timer)
+    }
+  }, [holdings])
 
   const summary = useMemo(() => {
     const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
@@ -1129,9 +1129,6 @@ function App() {
       }
     })
 
-    const actionIndex = findColumnIndex(stocksData.headers, ['action', 'type', 'side', 'buysell'])
-    const quantityIndex = findColumnIndex(stocksData.headers, ['qty', 'quantity', 'share', 'units'])
-    const totalIndex = findColumnIndex(stocksData.headers, ['total', 'amount', 'value', 'proceeds'])
     const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
     const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
     const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
@@ -1140,7 +1137,6 @@ function App() {
     let earnTradeCount = 0
     let percentSum = 0
     let percentCount = 0
-    let totalBuyAmount = 0
 
     displayStocksData.rows.forEach((row, rowIndex) => {
       if (profitLossIndex !== -1) {
@@ -1162,29 +1158,6 @@ function App() {
         }
       }
 
-      if (totalIndex !== -1) {
-        const actionValue =
-          actionIndex !== -1 ? stocksData.rows[rowIndex]?.[actionIndex] ?? '' : ''
-        const quantityValue =
-          quantityIndex !== -1
-            ? parseNumber(stocksData.rows[rowIndex]?.[quantityIndex] ?? '')
-            : 0
-        const totalValue = parseNumber(stocksData.rows[rowIndex]?.[totalIndex] ?? '')
-
-        const action = resolveAction(actionValue, quantityValue)
-
-        if (action === 'buy' && Number.isFinite(totalValue)) {
-          const rowCurrency = resolveCurrencyCode(
-            stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '',
-          )
-          totalBuyAmount += convertAmount(
-            Math.abs(totalValue),
-            rowCurrency,
-            selectedCurrency,
-            currencyRates,
-          )
-        }
-      }
     })
 
     const earnPerTrade = earnTradeCount > 0 ? earnAll / earnTradeCount : 0
@@ -1465,7 +1438,6 @@ function App() {
     moneyMoveData,
     stocksData,
     dividendData,
-    displayStocksData,
     selectedCurrency,
     currencyRates,
   ])
@@ -2019,14 +1991,14 @@ function App() {
               <Box className="sheet-section dashboard-holdings">
                 <div className="holdings-header">
                   <h1 className="sheet-title text-black">Current Holdings (US)</h1>
-                  {/* <p className="holdings-status">
+                  <p className="holdings-status">
                     {isUsMarketOpen === true
                       ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
                       : isUsMarketOpen === false
                         ? 'Market Closed'
                         : 'Market Status Unknown'}
                     {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
-                  </p> */}
+                  </p>
                 </div>
 
                 <TableContainer component={Paper} elevation={0} className="table-shell">
