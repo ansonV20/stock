@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Alert from '@mui/material/Alert'
 import CircularProgress from '@mui/material/CircularProgress'
 import MenuItem from '@mui/material/MenuItem'
@@ -9,11 +9,13 @@ import TableCell from '@mui/material/TableCell'
 import TableContainer from '@mui/material/TableContainer'
 import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
+import ToggleButton from '@mui/material/ToggleButton'
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Autocomplete from '@mui/material/Autocomplete'
 import TextField from '@mui/material/TextField'
+import type { Session } from '@supabase/supabase-js'
 import {
   enrichStocksWithProfitLoss,
-  fetchAllSheetsData,
   parseNumber,
   resolveAction,
   type SheetData,
@@ -23,6 +25,9 @@ import { MdDataUsage, MdTableRows, MdOutlineAdd } from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
 import { BarChart } from '@mui/x-charts/BarChart'
+import { supabase } from './supabaseClient'
+import { ensureUserProfile, insertUserRow, loadUserSheetData } from './supabaseData'
+import { downloadExcelTemplate, parseExcelFile, excelRowToObject, type ExcelDataRow } from './excelData'
 import './App.css'
 
 const CURRENCY_OPTIONS = ['USD', 'HKD'] as const
@@ -75,6 +80,11 @@ type AddFieldConfig = {
 }
 
 const ADD_TABLE_OPTIONS: AddTableName[] = ['Stocks', 'Dividend', 'Money Move']
+const EXCEL_PREVIEW_HEADERS: Record<AddTableName, string[]> = {
+  Stocks: ['Stock', 'Currency', 'Price', 'Action', 'Time', 'Quantity', 'Handling Fees'],
+  Dividend: ['Stock', 'Currency', 'Div', 'Time'],
+  'Money Move': ['Name', 'Currency', 'Price', 'Time', 'Action'],
+}
 
 const ADD_FORM_CONFIG: Record<AddTableName, AddFieldConfig[]> = {
   Stocks: [
@@ -326,32 +336,183 @@ function App() {
   const [isConfirmingAdd, setIsConfirmingAdd] = useState(false)
   const [isSubmittingAdd, setIsSubmittingAdd] = useState(false)
   const [addFormMessage, setAddFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isAuthReady, setIsAuthReady] = useState(false)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [currentUserName, setCurrentUserName] = useState<string>('')
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null) 
+  const [isUploadingExcel, setIsUploadingExcel] = useState(false)
+  const [excelUploadMessage, setExcelUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [selectedExcelFile, setSelectedExcelFile] = useState<File | null>(null)
+  const [excelPreviewData, setExcelPreviewData] = useState<ExcelDataRow | null>(null)
+  const [selectedExcelPreviewTable, setSelectedExcelPreviewTable] = useState<AddTableName>('Stocks')
+  const [isParsingExcelPreview, setIsParsingExcelPreview] = useState(false)
+  const [isConfirmingExcelAdd, setIsConfirmingExcelAdd] = useState(false)
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const spreadsheetId = import.meta.env.VITE_SPREADSHEET_ID
-  const stocksGid = import.meta.env.VITE_STOCKS
-  const dividendGid = import.meta.env.VITE_DIVIDEND
-  const moneymoveGid = import.meta.env.VITE_MONEYMOVE
-  const appendEndpoint = import.meta.env.VITE_SHEETS_APPEND_ENDPOINT?.trim() ?? ''
-
-  const isConfigValid = useMemo(
-    () =>
-      Boolean(
-        spreadsheetId?.trim() &&
-          stocksGid?.trim() &&
-          dividendGid?.trim() &&
-          moneymoveGid?.trim(),
-      ),
-    [spreadsheetId, stocksGid, dividendGid, moneymoveGid],
+  const isConfigValid = Boolean(
+    (import.meta.env.VITE_PUBLIC_SUPABASE_URL?.trim() || import.meta.env.VITE_SUPABASE_URL?.trim()) &&
+      (import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY?.trim() || import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()),
   )
 
   const displayStocksData = useMemo(() => enrichStocksWithProfitLoss(stocksData), [stocksData])
   const selectedAddFields = useMemo(() => ADD_FORM_CONFIG[selectedAddTable], [selectedAddTable])
+  const excelActionButtonSx = {
+    height: 40,
+    minWidth: 140,
+    borderRadius: '12px',
+    backgroundColor: 'var(--bg)',
+    border: '0px solid',
+    color: 'var(--text)',
+    textTransform: 'none',
+    '&.MuiButton-contained': {
+      backgroundColor: 'var(--special)',
+      color: 'var(--text)',
+      '&:hover': {
+        borderColor: 'var(--accent)',
+        opacity: 0.92,
+      },
+    },
+    '&.MuiButton-outlined:hover': {
+      borderColor: 'var(--accent)',
+      opacity: 0.92,
+    },
+  }
+
+  const previewRows = useMemo(() => {
+    if (!excelPreviewData) {
+      return [] as string[][]
+    }
+
+    if (selectedExcelPreviewTable === 'Stocks') {
+      return excelPreviewData.stocks
+    }
+
+    if (selectedExcelPreviewTable === 'Dividend') {
+      return excelPreviewData.dividend
+    }
+
+    return excelPreviewData.moneyMove
+  }, [excelPreviewData, selectedExcelPreviewTable])
+
+  const formatExcelPreviewCellValue = (value: string, headerName: string): string => {
+    const headerLower = headerName.toLowerCase()
+    const isTimeColumn = headerLower.includes('time')
+
+    if (!isTimeColumn || !value.trim()) {
+      return value
+    }
+
+    const asNumber = Number(value.trim())
+    if (!Number.isNaN(asNumber) && asNumber > 0) {
+      try {
+        const excelBaseDate = new Date(1899, 11, 30)
+        const jsDate = new Date(excelBaseDate.getTime() + asNumber * 24 * 60 * 60 * 1000)
+        return jsDate.toLocaleString()
+      } catch (err) {
+        console.warn('Failed to format Excel serial:', value, err)
+        return value
+      }
+    }
+
+    try {
+      const parsed = new Date(value.trim())
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleString()
+      }
+    } catch (err) {
+      console.warn('Failed to format date string:', value, err)
+    }
+
+    return value
+  }
 
   useEffect(() => {
     setAddFormValues(getDefaultFormValues(selectedAddTable))
     setIsConfirmingAdd(false)
     setAddFormMessage(null)
   }, [selectedAddTable])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const applySession = async (session: Session | null) => {
+      if (!isMounted) {
+        return
+      }
+
+      const user = session?.user ?? null
+      if (!user) {
+        setCurrentUserId(null)
+        setCurrentUserName('')
+        setCurrentUserEmail(null)
+        setIsAuthReady(true)
+        return
+      }
+
+      const fullName =
+        (typeof user.user_metadata?.full_name === 'string' && user.user_metadata.full_name) ||
+        (typeof user.user_metadata?.name === 'string' && user.user_metadata.name) ||
+        user.email ||
+        'User'
+
+      setCurrentUserId(user.id)
+      setCurrentUserName(fullName)
+      setCurrentUserEmail(typeof user.email === 'string' ? user.email : null) 
+      setIsAuthReady(true)
+
+      try {
+        await ensureUserProfile(user.id, fullName, user.email ?? null)
+      } catch (profileError) {
+        const message =
+          profileError instanceof Error ? profileError.message : 'Unable to sync user profile'
+        setError(message)
+      }
+    }
+
+    void supabase.auth.getSession().then(({ data }) => {
+      void applySession(data.session)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session)
+    })
+
+    return () => {
+      isMounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  const handleGoogleSignIn = async () => {
+    setError(null)
+    const { error: authError } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin,
+      },
+    })
+
+    if (authError) {
+      setError(`Google sign-in failed: ${authError.message}`)
+    }
+  }
+
+  const handleSignOut = async () => {
+    const { error: signOutError } = await supabase.auth.signOut()
+    if (signOutError) {
+      setError(`Sign out failed: ${signOutError.message}`)
+      return
+    }
+
+    setCurrentUserId(null)
+    setCurrentUserName('')
+    setCurrentUserEmail(null)
+    setStocksData({ headers: [], rows: [] })
+    setDividendData({ headers: [], rows: [] })
+    setMoneyMoveData({ headers: [], rows: [] })
+  }
 
   const handleAddFieldChange = (fieldKey: string, value: string) => {
     setIsConfirmingAdd(false)
@@ -438,11 +599,11 @@ function App() {
       return
     }
 
-    if (!appendEndpoint) {
+    if (!currentUserId) {
       setIsConfirmingAdd(false)
       setAddFormMessage({
         type: 'error',
-        text: 'Missing VITE_SHEETS_APPEND_ENDPOINT. Add it in your .env to enable row creation.',
+        text: 'Please sign in with Google before adding data.',
       })
       return
     }
@@ -450,30 +611,155 @@ function App() {
     setIsSubmittingAdd(true)
 
     try {
-      const payload = {
-        table: selectedAddTable,
-        row: addFormValues,
-      }
-
-      const response = await fetch(appendEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Append request failed with status ${response.status}`)
-      }
+      await insertUserRow(currentUserId, selectedAddTable, addFormValues)
+      const { stocks, dividend, moneyMove } = await loadUserSheetData(currentUserId)
+      setStocksData(stocks)
+      setDividendData(dividend)
+      setMoneyMoveData(moneyMove)
 
       setAddFormValues(getDefaultFormValues(selectedAddTable))
       setIsConfirmingAdd(false)
-      setAddFormMessage({ type: 'success', text: `Added new row to ${selectedAddTable}.` })
+      setAddFormMessage({ type: 'success', text: `Added new row to ${selectedAddTable} in Supabase.` })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
-      setAddFormMessage({ type: 'error', text: `Unable to append row. ${message}` })
+      setAddFormMessage({ type: 'error', text: `Unable to insert row. ${message}` })
     } finally {
       setIsConfirmingAdd(false)
       setIsSubmittingAdd(false)
+    }
+  }
+
+  const handleDownloadExcel = () => {
+    downloadExcelTemplate()
+  }
+
+  const handleExcelFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    setSelectedExcelFile(file)
+    setIsConfirmingExcelAdd(false)
+    setExcelUploadMessage(null)
+
+    if (!file) {
+      setExcelPreviewData(null)
+      return
+    }
+
+    setIsParsingExcelPreview(true)
+
+    try {
+      const parsedData = await parseExcelFile(file)
+      setExcelPreviewData(parsedData)
+      setSelectedExcelPreviewTable('Stocks')
+    } catch (error) {
+      setExcelPreviewData(null)
+      const message = error instanceof Error ? error.message : 'Failed to parse Excel file'
+      setExcelUploadMessage({ type: 'error', text: message })
+    } finally {
+      setIsParsingExcelPreview(false)
+    }
+  }
+
+  const handleSubmitExcelUpload = async () => {
+    if (!currentUserId) {
+      setExcelUploadMessage({ type: 'error', text: 'Please sign in with Google before uploading data.' })
+      return
+    }
+
+    if (!selectedExcelFile) {
+      setExcelUploadMessage({ type: 'error', text: 'Please choose an Excel file first.' })
+      return
+    }
+
+    if (!isConfirmingExcelAdd) {
+      setIsConfirmingExcelAdd(true)
+      return
+    }
+
+    setIsUploadingExcel(true)
+    setExcelUploadMessage(null)
+
+    try {
+      const excelData = excelPreviewData ?? (await parseExcelFile(selectedExcelFile))
+      let successCount = 0
+      let errorCount = 0
+
+      // Process Stocks
+      for (const row of excelData.stocks) {
+        try {
+          const rowObj = excelRowToObject(row, [
+            'Stock',
+            'Currency',
+            'Price',
+            'Action',
+            'Time',
+            'Quantity',
+            'Handling Fees',
+          ])
+          if (rowObj.stock?.trim()) {
+            await insertUserRow(currentUserId, 'Stocks', rowObj)
+            successCount++
+          }
+        } catch (err) {
+          errorCount++
+          console.error('Stock row error:', err)
+        }
+      }
+
+      // Process Dividend
+      for (const row of excelData.dividend) {
+        try {
+          const rowObj = excelRowToObject(row, ['Stock', 'Currency', 'Div', 'Time'])
+          if (rowObj.stock?.trim()) {
+            await insertUserRow(currentUserId, 'Dividend', rowObj)
+            successCount++
+          }
+        } catch (err) {
+          errorCount++
+          console.error('Dividend row error:', err)
+        }
+      }
+
+      // Process Money Move
+      for (const row of excelData.moneyMove) {
+        try {
+          const rowObj = excelRowToObject(row, ['Name', 'Currency', 'Price', 'Time', 'Action'])
+          if (rowObj.name?.trim()) {
+            await insertUserRow(currentUserId, 'Money Move', rowObj)
+            successCount++
+          }
+        } catch (err) {
+          errorCount++
+          console.error('Money Move row error:', err)
+        }
+      }
+
+      // Reload data
+      try {
+        const newData = await loadUserSheetData(currentUserId)
+        setStocksData(newData.stocks)
+        setDividendData(newData.dividend)
+        setMoneyMoveData(newData.moneyMove)
+      } catch (reloadErr) {
+        console.error('Reload error:', reloadErr)
+      }
+
+      const message = `Added ${successCount} rows successfully${errorCount > 0 ? ` (${errorCount} errors)` : ''}`
+      setExcelUploadMessage({
+        type: errorCount === 0 ? 'success' : 'error',
+        text: message,
+      })
+      setSelectedExcelFile(null)
+      setExcelPreviewData(null)
+      setSelectedExcelPreviewTable('Stocks')
+      if (excelFileInputRef.current) {
+        excelFileInputRef.current.value = ''
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to parse Excel file'
+      setExcelUploadMessage({ type: 'error', text: message })
+    } finally {
+      setIsConfirmingExcelAdd(false)
+      setIsUploadingExcel(false)
     }
   }
 
@@ -1266,39 +1552,46 @@ function App() {
   useEffect(() => {
     if (!isConfigValid) {
       setError(
-        'Missing required env vars in .env.local: VITE_SPREADSHEET_ID, VITE_STOCKS, VITE_DIVIDEND, VITE_MONEYMOVE',
+        'Missing required env vars in .env.local: VITE_PUBLIC_SUPABASE_URL + VITE_PUBLIC_SUPABASE_ANON_KEY (or VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY)',
       )
       setIsLoading(false)
       return
     }
 
-    const fetchSheet = async () => {
+    if (!isAuthReady) {
+      setIsLoading(true)
+      return
+    }
+
+    if (!currentUserId) {
+      setStocksData({ headers: [], rows: [] })
+      setDividendData({ headers: [], rows: [] })
+      setMoneyMoveData({ headers: [], rows: [] })
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
+    const loadData = async () => {
       setIsLoading(true)
       setError(null)
 
       try {
-        const { stocks, dividend, moneyMove } = await fetchAllSheetsData(
-          spreadsheetId,
-          stocksGid,
-          dividendGid,
-          moneymoveGid,
-        )
+        const { stocks, dividend, moneyMove } = await loadUserSheetData(currentUserId)
 
         setStocksData(stocks)
         setDividendData(dividend)
         setMoneyMoveData(moneyMove)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        setError(
-          `Failed to load one or more sheets. Ensure the sheet is shared publicly (or published to web). Details: ${message}`,
-        )
+        setError(`Failed to load your Supabase data. Details: ${message}`)
       } finally {
         setIsLoading(false)
       }
     }
 
-    void fetchSheet()
-  }, [isConfigValid, spreadsheetId, stocksGid, dividendGid, moneymoveGid])
+    void loadData()
+  }, [currentUserId, isAuthReady, isConfigValid])
 
   const renderSheetTable = (title: string, data: SheetData) => {
     const shouldIncludeColumn = (header: string): boolean => {
@@ -1422,6 +1715,7 @@ function App() {
   return (
     <main className="page">
       <header className="page-header">
+        <Box className="header-all">
         <div className="page-nav">
           <Button
             variant={page === 'dataShow' ? 'contained' : 'outlined'}
@@ -1496,29 +1790,91 @@ function App() {
             <MdOutlineAdd size={20} />
           </Button>
         </div>
-        <Autocomplete
-          className="currency-picker"
-          sx={{
-            '& .MuiOutlinedInput-root': {
-            borderRadius: '14px',
-            borderColor: 'var(--special)',
-            // backgroundColor: 'var(--bg)',
-            color: 'var(--text)',
-            '& fieldset': { borderColor: 'var(--wbg)', color: 'var(--wbg)' },
-            '&:hover fieldset': { borderColor: 'var(--wbg)', opacity: 0.92},
-            '&.Mui-focused fieldset': { borderColor: 'var(--special)', borderWidth: '1px', color: 'var(--text)' },
-            },
-            '& .MuiInputLabel-root': { color: 'var(--wbg)' },
-            '& .MuiInputLabel-root.Mui-focused': { color: 'var(--special)' },
-            '& .MuiSvgIcon-root': { color: 'var(--text)' },
-          }}
-          size="small"
-          disableClearable
-          options={[...CURRENCY_OPTIONS]}
-          value={selectedCurrency}
-          onChange={(_, value) => setSelectedCurrency(value)}
-          renderInput={(params) => <TextField {...params} label="Currency" />}
-        />
+        <div className="header-controls">
+          {currentUserId && (
+            <Autocomplete
+              className="currency-picker"
+              sx={{
+                width: '100px',
+                height: '40px',
+                '& .MuiOutlinedInput-root': {
+                  height: '40px',
+                  borderRadius: '12px',
+                  borderColor: 'var(--special)',
+                  color: 'var(--text)',
+                  '& fieldset': { borderColor: 'var(--wbg)', color: 'var(--wbg)' },
+                  '&:hover fieldset': { borderColor: 'var(--wbg)', opacity: 0.92},
+                  '&.Mui-focused fieldset': { borderColor: 'var(--special)', borderWidth: '1px', color: 'var(--text)' },
+                },
+                '& .MuiInputLabel-root': { color: 'var(--wbg)', fontSize: '0.85rem' },
+                '& .MuiInputLabel-root.Mui-focused': { color: 'var(--special)' },
+                '& .MuiSvgIcon-root': { color: 'var(--text)' },
+              }}
+              size="small"
+              disableClearable
+              options={[...CURRENCY_OPTIONS]}
+              value={selectedCurrency}
+              onChange={(_, value) => setSelectedCurrency(value)}
+              renderInput={(params) => <TextField {...params} label="Currency" />}
+            />
+          )}
+
+          <div className="auth-controls">
+            {currentUserId ? (
+              <Button
+                variant="outlined"
+                onClick={handleSignOut}
+                sx={{
+                  borderRadius: '12px',
+                  color: 'var(--wbg)',
+                  borderColor: 'var(--wbg)',
+                  textTransform: 'none',
+                  fontSize: '0.95rem',
+                  padding: '6px 12px',
+                  width: '100px',
+                  height: '40px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  whiteSpace: 'nowrap',
+                  '&:hover': {
+                    backgroundColor: 'transparent',
+                    opacity: 0.75,
+                    borderColor: 'var(--wbg)',
+                  },
+                }}
+              >
+                Logout
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                onClick={handleGoogleSignIn}
+                sx={{
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--special)',
+                  color: 'var(--text)',
+                  textTransform: 'none',
+                  fontSize: '0.95rem',
+                  padding: '6px 12px',
+                  width: '100px',
+                  height: '40px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  whiteSpace: 'nowrap',
+                  '&:hover': {
+                    backgroundColor: 'var(--special)',
+                    opacity: 0.85,
+                  },
+                }}
+              >
+                Login
+              </Button>
+            )}
+          </div>
+        </div>
+        </Box>
       </header>
 
 
@@ -1529,6 +1885,8 @@ function App() {
         </div>
         ) : error ? (
           <Alert severity="error">{error}</Alert>
+        ) : !currentUserId ? (
+          <Alert severity="info">Sign in with Google to view and save your personal data.</Alert>
         ) : (
           page === 'table' ? (
           <>
@@ -1537,7 +1895,12 @@ function App() {
             {renderSheetTable('Money Move', moneyMoveData)}
           </>
           ) : page === 'dataShow' ? (
-            <Box className="dashboard-layout">
+            <Box>
+              <Box className="user-show">
+                <h1 className="user-title text-black">{currentUserName}</h1>
+                <p className="user-title">{currentUserEmail}</p>
+              </Box>
+              <Box className="dashboard-layout">
               <section className="summary-grid" aria-label="Portfolio summary">
                 <Box className="summary-card">
                   <p className="summary-label">Total</p>
@@ -1551,15 +1914,15 @@ function App() {
                   <p className="summary-label">Dividend</p>
                   <p className="summary-value">{formatCurrency(summary.dividendTotal, selectedCurrency)}</p>
                 </Box>
+                <Box className="summary-card">
+                  <p className="summary-label">% (Average)</p>
+                  <p className="summary-value">{formatPercent(summary.percentAverage)}</p>
+                </Box>
                 <Box className="summary-card summary-card-earn">
                   <p className="summary-label">Earn (All / Per Trade)</p>
                   <p className="summary-value">
                     {formatCurrency(summary.earnAll, selectedCurrency)} / {formatCurrency(summary.earnPerTrade, selectedCurrency)}
                   </p>
-                </Box>
-                <Box className="summary-card">
-                  <p className="summary-label">% (Average)</p>
-                  <p className="summary-value">{formatPercent(summary.percentAverage)}</p>
                 </Box>
               </section>
 
@@ -1656,14 +2019,14 @@ function App() {
               <Box className="sheet-section dashboard-holdings">
                 <div className="holdings-header">
                   <h1 className="sheet-title text-black">Current Holdings (US)</h1>
-                  <p className="holdings-status">
+                  {/* <p className="holdings-status">
                     {isUsMarketOpen === true
                       ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
                       : isUsMarketOpen === false
                         ? 'Market Closed'
                         : 'Market Status Unknown'}
                     {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
-                  </p>
+                  </p> */}
                 </div>
 
                 <TableContainer component={Paper} elevation={0} className="table-shell">
@@ -1746,10 +2109,10 @@ function App() {
                 </TableContainer>
               </Box>
             </Box>
+            </Box>
           ) : page === 'add' ? (
             <Box className="add-layout">
               <h1 className='sheet-title text-black'>Add data</h1>
-
               <Paper elevation={0} className="add-form-card">
                 <Box component="form" className="add-form-grid" onSubmit={handleSubmitAdd}>
                   <Box className="add-table-switcher" role="group" aria-label="Choose table">
@@ -1762,6 +2125,7 @@ function App() {
                     >
                       {selectedAddTable}
                     </Button>
+                    <p className='add-table-label'>* click the table name to switch tables</p>
                   </Box>
 
                   {selectedAddFields.map((field) => {
@@ -1821,16 +2185,142 @@ function App() {
                     <Button
                       type="submit"
                       variant="contained"
-                      disabled={isSubmittingAdd}
+                      disabled={isSubmittingAdd || !currentUserId}
                       className={isConfirmingAdd ? 'is-confirming' : ''}
                     >
-                      {isSubmittingAdd ? 'Adding...' : isConfirmingAdd ? 'Conform' : 'Add Row'}
+                      {isSubmittingAdd ? 'Adding...' : isConfirmingAdd ? 'Conform' : currentUserId ? 'Add Row' : 'Sign in required'}
                     </Button>
                   </Box>
 
                   {addFormMessage ? (
                     <Alert severity={addFormMessage.type}>{addFormMessage.text}</Alert>
                   ) : null}
+                </Box>
+              </Paper>
+
+              <h1 className='sheet-title text-black'>Upload via Excel</h1>
+              <Paper elevation={0} className="add-form-card">
+                <Box className="excel-section">
+                  <Box className="excel-actions" style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                    <Button
+                      component="label"
+                      variant="outlined"
+                      sx={{ ...excelActionButtonSx, maxWidth: 280, justifyContent: 'flex-start' }}
+                      disabled={isUploadingExcel || !currentUserId}
+                      startIcon={<MdTableRows />}
+                    >
+                      {selectedExcelFile ? selectedExcelFile.name : 'Choose Excel File'}
+                      <input
+                        ref={excelFileInputRef}
+                        hidden
+                        accept=".xlsx,.xls"
+                        type="file"
+                        onChange={handleExcelFileChange}
+                        disabled={isUploadingExcel || !currentUserId}
+                      />
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      sx={{ ... excelActionButtonSx, backgroundColor: 'var(--special)', color: 'var(--text)', '&:hover': { backgroundColor: 'var(--accent)' } }}
+                      onClick={handleDownloadExcel}
+                      disabled={!currentUserId}
+                      startIcon={<MdDataUsage />}
+                    >
+                      Download Template
+                    </Button>
+                  </Box>
+                  {excelUploadMessage ? (
+                    <Alert severity={excelUploadMessage.type}>{excelUploadMessage.text}</Alert>
+                  ) : null}
+
+                  {!selectedExcelFile ? (
+                    <div style={{ fontSize: '0.875rem', color: '#666', marginTop: '1rem' }}>
+                      <p>
+                        <strong>Instructions:</strong>
+                      </p>
+                      <ul style={{ marginTop: '0.5rem', marginBottom: '0.5rem', textAlign: 'left' }}>
+                        <li>Download the template to see the required format</li>
+                        <li>Fill in your data in the Stocks, Dividend, and Money Move sheets</li>
+                        <li>Upload the file to import all rows to the database at once</li>
+                      </ul>
+                    </div>
+                  ) : (
+                    <Box className="excel-preview-panel">
+                      {isParsingExcelPreview ? (
+                        <Box className="state-block">
+                          <CircularProgress size={20} />
+                          <span>Reading Excel file preview...</span>
+                        </Box>
+                      ) : (
+                        <>
+                          <ToggleButtonGroup
+                            value={selectedExcelPreviewTable}
+                            exclusive
+                            onChange={(_, value: AddTableName | null) => {
+                              if (value) {
+                                setSelectedExcelPreviewTable(value)
+                              }
+                            }}
+                            size="small"
+                            className="excel-toggle-group"
+                          >
+                            <ToggleButton value="Stocks">Stocks ({excelPreviewData?.stocks.length ?? 0})</ToggleButton>
+                            <ToggleButton value="Dividend">Dividend ({excelPreviewData?.dividend.length ?? 0})</ToggleButton>
+                            <ToggleButton value="Money Move">Money Move ({excelPreviewData?.moneyMove.length ?? 0})</ToggleButton>
+                          </ToggleButtonGroup>
+
+                          <TableContainer component={Paper} elevation={0} className="table-shell excel-preview-table">
+                            <Table size="small" stickyHeader>
+                              <TableHead>
+                                <TableRow>
+                                  {EXCEL_PREVIEW_HEADERS[selectedExcelPreviewTable].map((header) => (
+                                    <TableCell key={`${selectedExcelPreviewTable}-${header}`}>{header}</TableCell>
+                                  ))}
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {previewRows.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell colSpan={EXCEL_PREVIEW_HEADERS[selectedExcelPreviewTable].length}>
+                                      No rows found in this sheet.
+                                    </TableCell>
+                                  </TableRow>
+                                ) : (
+                                  previewRows.map((row, rowIndex) => (
+                                    <TableRow key={`${selectedExcelPreviewTable}-${rowIndex}`}>
+                                      {EXCEL_PREVIEW_HEADERS[selectedExcelPreviewTable].map((header, columnIndex) => (
+                                        <TableCell key={`${selectedExcelPreviewTable}-${rowIndex}-${columnIndex}`}>
+                                          {formatExcelPreviewCellValue(row[columnIndex] ?? '', header)}
+                                        </TableCell>
+                                      ))}
+                                    </TableRow>
+                                  ))
+                                )}
+                              </TableBody>
+                            </Table>
+                          </TableContainer>
+                        </>
+                      )}
+                    </Box>
+                  )}
+
+                  <Box className="add-form-actions">
+                    <Button
+                      type="button"
+                      variant="contained"
+                      disabled={isUploadingExcel || !currentUserId || !selectedExcelFile || isParsingExcelPreview}
+                      className={isConfirmingExcelAdd ? 'is-confirming' : ''}
+                      onClick={handleSubmitExcelUpload}
+                    >
+                      {isUploadingExcel
+                        ? 'Adding...'
+                        : isConfirmingExcelAdd
+                          ? 'Conform'
+                          : currentUserId
+                            ? 'Add Data'
+                            : 'Sign in required'}
+                    </Button>
+                  </Box>
                 </Box>
               </Paper>
             </Box>
@@ -1840,10 +2330,11 @@ function App() {
 
       {!isLoading &&
         !error &&
+        currentUserId &&
         displayStocksData.rows.length === 0 &&
         dividendData.rows.length === 0 &&
         moneyMoveData.rows.length === 0 &&
-        <Alert severity="info">No rows found in the sheets.</Alert>}
+        <Alert severity="info">No rows found in Supabase yet.</Alert>}
     </main>
   )
 }

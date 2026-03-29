@@ -75,53 +75,166 @@ export default defineConfig([
 ```
 # stock
 
-## Enable Add Row (Google Sheets Append API)
+## Supabase Migration + Google Login
 
-The Add page posts to `VITE_SHEETS_APPEND_ENDPOINT`. This project now includes a local API server using `spreadsheets.values.append`.
+This app now stores data in Supabase and scopes all records by logged-in user.
 
-### 1. Configure env
+### 1. Install and configure env
 
-Copy `.env.example` to `.env.local` and fill values:
-
-- `VITE_SHEETS_APPEND_ENDPOINT=http://localhost:8787/api/sheets/append`
-- `SPREADSHEET_ID` (or `VITE_SPREADSHEET_ID`)
-- Google credentials:
-  - `GOOGLE_APPLICATION_CREDENTIALS=./credentials.json` (recommended), or
-  - `GOOGLE_SERVICE_ACCOUNT_KEY_JSON=...`
-
-Default ranges:
-
-- `SHEET_RANGE_STOCKS=Stocks!A:G`
-- `SHEET_RANGE_DIVIDEND=Dividend!A:D`
-- `SHEET_RANGE_MONEY_MOVE=Money Move!A:E`
-
-### 2. Run frontend and API
-
-In two terminals:
+Create `.env.local`:
 
 ```bash
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+VITE_FINNHUB_TOKEN=YOUR_FINNHUB_TOKEN
+```
+
+Then run:
+
+```bash
+npm install
 npm run dev
 ```
 
-```bash
-npm run server
+### 2. SQL schema (run in Supabase SQL Editor)
+
+```sql
+-- Needed for gen_random_uuid() if your project does not already have it.
+create extension if not exists pgcrypto;
+
+-- User profile table (requested name: "user").
+create table if not exists public."user" (
+  id uuid primary key references auth.users(id) on delete cascade,
+  full_name text not null,
+  email text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.stocks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  stock text not null,
+  currency text not null,
+  price numeric(18, 6) not null,
+  action text not null,
+  time timestamptz not null,
+  quantity numeric(18, 6) not null,
+  handling_fees numeric(18, 6) not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.dividend (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  stock text not null,
+  currency text not null,
+  div numeric(18, 6) not null,
+  time timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.money_move (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  currency text not null,
+  price numeric(18, 6) not null,
+  time timestamptz not null,
+  action text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_stocks_user_time on public.stocks(user_id, time);
+create index if not exists idx_dividend_user_time on public.dividend(user_id, time);
+create index if not exists idx_money_move_user_time on public.money_move(user_id, time);
+
+alter table public."user" enable row level security;
+alter table public.stocks enable row level security;
+alter table public.dividend enable row level security;
+alter table public.money_move enable row level security;
+
+drop policy if exists "user_select_own" on public."user";
+create policy "user_select_own"
+on public."user"
+for select
+to authenticated
+using (auth.uid() = id);
+
+drop policy if exists "user_insert_own" on public."user";
+create policy "user_insert_own"
+on public."user"
+for insert
+to authenticated
+with check (auth.uid() = id);
+
+drop policy if exists "user_update_own" on public."user";
+create policy "user_update_own"
+on public."user"
+for update
+to authenticated
+using (auth.uid() = id)
+with check (auth.uid() = id);
+
+drop policy if exists "stocks_select_own" on public.stocks;
+create policy "stocks_select_own"
+on public.stocks
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists "stocks_insert_own" on public.stocks;
+create policy "stocks_insert_own"
+on public.stocks
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+drop policy if exists "dividend_select_own" on public.dividend;
+create policy "dividend_select_own"
+on public.dividend
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists "dividend_insert_own" on public.dividend;
+create policy "dividend_insert_own"
+on public.dividend
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+drop policy if exists "money_move_select_own" on public.money_move;
+create policy "money_move_select_own"
+on public.money_move
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists "money_move_insert_own" on public.money_move;
+create policy "money_move_insert_own"
+on public.money_move
+for insert
+to authenticated
+with check (auth.uid() = user_id);
 ```
 
-Append endpoint health check:
+### 3. Supabase Auth setup (Google)
 
-```bash
-curl http://localhost:8787/health
-```
+1. In Supabase Dashboard, go to Authentication -> Providers -> Google and enable it.
+2. Create OAuth credentials in Google Cloud Console:
+   - Application type: Web application
+   - Authorized redirect URI:
+     - `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`
+3. Copy Client ID and Client Secret into Supabase Google provider settings.
+4. In Supabase Dashboard, open Authentication -> URL Configuration and set:
+   - Site URL: `http://localhost:5173`
+   - Additional Redirect URLs: `http://localhost:5173`
+5. Save settings and test sign-in from the app using the "Sign in with Google" button.
 
-### 3. Notes
+### 4. Behavior after migration
 
-- Service account must have access to the target spreadsheet.
-- `valueInputOption` is `USER_ENTERED`.
-- Rows are appended via `POST /api/sheets/append` with body:
-
-```json
-{
-  "table": "Stocks | Dividend | Money Move",
-  "row": { "...": "..." }
-}
-```
+- Each user signs in with Google.
+- App upserts profile into table `public."user"`.
+- All `stocks`, `dividend`, `money_move` rows include `user_id`.
+- RLS ensures each user can only read/write their own rows.

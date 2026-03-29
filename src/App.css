@@ -13,6 +13,7 @@
   gap: 12px;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
 }
 
 .page-nav {
@@ -21,7 +22,48 @@
 }
 
 .currency-picker {
-  width: 180px;
+  width: 100px !important;
+  height: 40px !important;
+  flex-shrink: 0;
+}
+
+.header-all {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.auth-controls .MuiButton-root {
+  width: 100px !important;
+  height: 40px !important;
+  padding: 6px 12px !important;
+  flex-shrink: 0;
+}
+
+.auth-user {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wbg);
+  font-size: 0.92rem;
 }
 
 .page-header h1 {
@@ -66,6 +108,25 @@
   color: var(--text);
 }
 
+.user-title {
+  text-align: left;
+  margin: 0;
+  /* padding: 30px 0 2px 0; */
+  font-weight: 700;
+  color: var(--wbg);
+}
+
+.user-show {
+  height: fit-content;
+  margin: 20px 0px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 20px;
+}
+
+
 .dashboard-layout {
   width: 100%;
   display: grid;
@@ -87,8 +148,8 @@
   /* border: 1px solid var(--border); */
   border-radius: 20px;
   padding: 16px;
-  background: linear-gradient(180deg, var(--text), var(--wbg));
-  /* background: var(--accent); */
+  /* background: linear-gradient(180deg, var(--text), var(--wbg)); */
+  background: var(--text);
   color: var(--bg);
 }
 
@@ -256,7 +317,7 @@
 
 .add-table-label {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.7rem;
   color: var(--accent);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -267,8 +328,8 @@
   min-width: 0;
   color: var(--bg);
   text-transform: none;
-  font-size: 2rem;
-  line-height: 1.2;
+  font-size: 2.2rem;
+  line-height: 1;
   font-weight: 700;
   justify-content: flex-start;
 }
@@ -333,6 +394,28 @@
   grid-column: 1 / -1;
 }
 
+.excel-section {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.excel-preview-panel {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.excel-toggle-group {
+  width: fit-content;
+}
+
+.excel-preview-table {
+  max-height: 300px;
+}
+
 
 @media (max-width: 1024px) {
   .dashboard-layout {
@@ -370,8 +453,15 @@
     color: var(--text); */
   }
 
+  .header-controls {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+
   .summary-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .add-form-grid {
@@ -381,5 +471,50 @@
   .page {
     padding: 24px 14px;
     gap: 16px;
+  }
+}
+
+@media (max-width: 425px) {
+  .page-nav {
+    gap: 6px;
+  }
+
+  .page-nav .MuiButton-root {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+  }
+
+  .page-nav .MuiButton-root svg {
+    font-size: 16px;
+  }
+
+  .currency-picker {
+    width: 80px !important;
+    height: 32px !important;
+  }
+
+  .currency-picker .MuiOutlinedInput-root {
+    height: 32px !important;
+  }
+
+  .currency-picker .MuiInputLabel-root {
+    font-size: 0.7rem !important;
+  }
+
+  .auth-controls .MuiButton-root {
+    width: 80px !important;
+    height: 32px !important;
+    font-size: 0.8rem !important;
+    padding: 4px 8px !important;
+  }
+
+  .header-controls {
+    gap: 6px;
+  }
+
+  .page {
+    padding: 16px 10px;
   }
 }
