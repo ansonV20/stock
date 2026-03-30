@@ -87,6 +87,8 @@ Create `.env.local`:
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
 VITE_FINNHUB_TOKEN=YOUR_FINNHUB_TOKEN
+# Optional (recommended on hosted env like Vercel)
+VITE_AUTH_REDIRECT_URL=https://YOUR_APP_DOMAIN
 ```
 
 Then run:
@@ -228,9 +230,17 @@ with check (auth.uid() = user_id);
      - `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`
 3. Copy Client ID and Client Secret into Supabase Google provider settings.
 4. In Supabase Dashboard, open Authentication -> URL Configuration and set:
-   - Site URL: `http://localhost:5173`
-   - Additional Redirect URLs: `http://localhost:5173`
+  - Local dev Site URL: `http://localhost:5173`
+  - Production Site URL: `https://YOUR_APP_DOMAIN`
+  - Additional Redirect URLs (include both):
+    - `http://localhost:5173`
+    - `https://YOUR_APP_DOMAIN`
 5. Save settings and test sign-in from the app using the "Sign in with Google" button.
+
+Notes:
+- If login from production redirects to localhost, your Supabase URL Configuration still points to localhost.
+- `VITE_AUTH_REDIRECT_URL` is optional but recommended for hosted deployments.
+- In local development (`localhost` / `127.0.0.1`), app login redirect stays on local origin even if `VITE_AUTH_REDIRECT_URL` is set.
 
 ### 4. Behavior after migration
 

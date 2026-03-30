@@ -518,3 +518,48 @@
     padding: 16px 10px;
   }
 }
+
+@media (prefers-color-scheme: light) {
+.user-title {
+    color: var(--text);
+  }
+
+  .summary-label {
+    color: var(--text);
+  }
+
+  .summary-card {
+    background: #fff;
+    color: var(--text);
+  }
+
+  .chart-card {
+    background: #fff;
+  }
+
+  .chart-title {
+    color: var(--text);
+  }
+
+  .add-form-card {
+    background: #fff !important;
+  }
+
+  .add-table-button.MuiButton-root {
+    color: var(--text);
+  }
+
+  .add-form-grid .MuiInputBase-root,
+  .add-form-grid .MuiInputLabel-root {
+    color: var(--text) !important;
+  }
+  
+  .add-form-triple-row .add-field-stock,
+  .add-form-triple-row .add-field-action,
+  .add-form-triple-row .add-field-quantity,
+  .add-form-name-do-row .add-field-name,
+  .add-form-name-do-row .add-field-do {
+    color: var(--text) !important;
+  }
+
+}

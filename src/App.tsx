@@ -66,6 +66,7 @@ const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i
 const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
 const HOLDINGS_UPDATE_INTERVAL_MS = 10 * 60 * 1000
+const AUTH_REDIRECT_URL = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim()
 
 type AddTableName = 'Stocks' | 'Dividend' | 'Money Move'
 
@@ -316,6 +317,28 @@ function formatCompactAxisDate(label: string): string {
   return `${day}/${month}/${year.slice(-2)}`
 }
 
+function resolveOAuthRedirectUrl(): string {
+  if (typeof window === 'undefined') {
+    return AUTH_REDIRECT_URL ?? ''
+  }
+
+  const isLocalhost =
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  if (isLocalhost) {
+    return window.location.origin
+  }
+
+  if (!AUTH_REDIRECT_URL) {
+    return window.location.origin
+  }
+
+  try {
+    return new URL(AUTH_REDIRECT_URL).toString()
+  } catch {
+    return window.location.origin
+  }
+}
+
 function App() {
   const [stocksData, setStocksData] = useState<SheetData>({ headers: [], rows: [] })
   const [dividendData, setDividendData] = useState<SheetData>({ headers: [], rows: [] })
@@ -490,7 +513,7 @@ function App() {
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo: resolveOAuthRedirectUrl(),
       },
     })
 
