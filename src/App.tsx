@@ -2638,14 +2638,14 @@ function App() {
               <Box className="sheet-section dashboard-holdings">
                 <div className="holdings-header">
                   <h1 className="sheet-title text-black">Current Holdings (US)</h1>
-                  <p className="holdings-status">
+                  {/* <p className="holdings-status">
                     {isUsMarketOpen === true
                       ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
                       : isUsMarketOpen === false
                         ? 'Market Closed'
                         : 'Market Status Unknown'}
                     {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
-                  </p>
+                  </p> */}
                 </div>
 
                 <TableContainer component={Paper} elevation={0} className="table-shell">
