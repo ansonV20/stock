@@ -2366,7 +2366,7 @@ function App() {
             <MdShowChart size={20} />
           </Button>
         </div>
-        <div className="header-controls">
+        <div className="header-controls page-nav">
           <Button
             aria-haspopup="menu"
             aria-expanded={isSettingsOpen ? 'true' : undefined}
