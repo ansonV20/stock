@@ -95,6 +95,7 @@ const NOTIFICATIONS_STORAGE_KEY = 'stock_notifications_enabled_v1'
 const LIVE_SYMBOLS_STORAGE_KEY = 'stock_live_symbols_v1'
 const PRICE_ALERTS_STORAGE_KEY = 'stock_price_alerts_v1'
 const MARKET_OPEN_NOTICE_DAY_KEY = 'stock_market_open_notice_day_v1'
+const NOTIFICATION_SW_PATH = '/notification-sw.js'
 
 type AddTableName = 'Stocks' | 'Dividend' | 'Money Move'
 type PageName = 'table' | 'dataShow' | 'add' | 'live'
@@ -487,6 +488,7 @@ function App() {
   const [alertCondition, setAlertCondition] = useState<PriceAlertCondition>('above')
   const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>([])
   const lastKnownMarketOpenRef = useRef<boolean | null>(null)
+  const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const isConfigValid = Boolean(
@@ -608,6 +610,30 @@ function App() {
 
   const isSettingsOpen = Boolean(settingsAnchorEl)
 
+  const getNotificationRegistration = async (): Promise<ServiceWorkerRegistration | null> => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+      return null
+    }
+
+    if (notificationRegistrationRef.current) {
+      return notificationRegistrationRef.current
+    }
+
+    try {
+      const existing = await navigator.serviceWorker.getRegistration(NOTIFICATION_SW_PATH)
+      if (existing) {
+        notificationRegistrationRef.current = existing
+        return existing
+      }
+
+      const next = await navigator.serviceWorker.register(NOTIFICATION_SW_PATH)
+      notificationRegistrationRef.current = next
+      return next
+    } catch {
+      return null
+    }
+  }
+
   const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
     setSettingsAnchorEl(event.currentTarget)
   }
@@ -639,7 +665,22 @@ function App() {
       return
     }
 
-    new Notification(title, { body })
+    void (async () => {
+      const registration = await getNotificationRegistration()
+
+      if (!registration) {
+        new Notification(title, { body })
+        return
+      }
+
+      await registration.showNotification(title, {
+        body,
+        tag: 'stock-alert',
+        icon: '/vite.svg',
+        badge: '/vite.svg',
+        requireInteraction: true,
+      })
+    })()
   }
 
   const handleToggleNotifications = async (_event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => {
@@ -662,6 +703,11 @@ function App() {
 
     setNotificationPermission(permission)
     const enabled = permission === 'granted'
+
+    if (enabled) {
+      await getNotificationRegistration()
+    }
+
     setNotificationsEnabled(enabled)
     safeWriteStorage(NOTIFICATIONS_STORAGE_KEY, enabled)
   }
@@ -803,6 +849,10 @@ function App() {
     }
 
     setNotificationPermission(Notification.permission)
+
+    if ('serviceWorker' in navigator) {
+      void getNotificationRegistration()
+    }
   }, [])
 
   const handleGoogleSignIn = async () => {
