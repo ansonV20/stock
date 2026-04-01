@@ -457,8 +457,8 @@ function App() {
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
   const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
   const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
-  const [isQuoteLoading, setIsQuoteLoading] = useState(false)
-  const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
+  // const [isQuoteLoading, setIsQuoteLoading] = useState(false)
+  // const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
   const [selectedAddTable, setSelectedAddTable] = useState<AddTableName>('Stocks')
   const [addFormValues, setAddFormValues] = useState<Record<string, string>>(
     getDefaultFormValues('Stocks'),
@@ -1351,14 +1351,14 @@ function App() {
 
   useEffect(() => {
     if (!FINNHUB_TOKEN || holdings.length === 0) {
-      setIsQuoteLoading(false)
+      // setIsQuoteLoading(false)
       return
     }
 
     let isCancelled = false
 
     const fetchHoldingsQuotes = async () => {
-      setIsQuoteLoading(true)
+      // setIsQuoteLoading(true)
 
       try {
         const marketStatusResponse = await fetch(
@@ -1417,14 +1417,14 @@ function App() {
         })
 
         setQuotesBySymbol(nextQuotes)
-        setQuoteUpdatedAt(Date.now())
+        // setQuoteUpdatedAt(Date.now())
       } catch {
         if (!isCancelled) {
           setIsUsMarketOpen(null)
         }
       } finally {
         if (!isCancelled) {
-          setIsQuoteLoading(false)
+          // setIsQuoteLoading(false)
         }
       }
     }
@@ -2636,7 +2636,7 @@ function App() {
 
 
               <Box className="sheet-section dashboard-holdings">
-                <div className="holdings-header">
+                {/* <div className="holdings-header"> */}
                   <h1 className="sheet-title text-black">Current Holdings (US)</h1>
                   {/* <p className="holdings-status">
                     {isUsMarketOpen === true
@@ -2646,7 +2646,7 @@ function App() {
                         : 'Market Status Unknown'}
                     {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
                   </p> */}
-                </div>
+                {/* </div> */}
 
                 <TableContainer component={Paper} elevation={0} className="table-shell">
                   <Table size="small" aria-label="current holdings table">
