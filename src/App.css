@@ -21,11 +21,11 @@
   gap: 10px;
 }
 
-.currency-picker {
-  width: 100px !important;
-  height: 40px !important;
+/* .currency-picker {
+  width: 100px !important; */
+  /* height: 40px !important;
   flex-shrink: 0;
-}
+} */
 
 .header-all {
   width: 100%;
@@ -41,6 +41,122 @@
   justify-content: end;
   gap: 8px;
   flex-wrap: nowrap;
+}
+
+.settings-menu-paper {
+  border-radius: 16px !important;
+  border: 1px solid var(--accent-border);
+  background: var(--bg) !important;
+  color: var(--text);
+  box-shadow: var(--shadow) !important;
+}
+
+.settings-menu-content {
+  width: 280px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-menu-title {
+  margin: 0;
+  text-align: left;
+  font-size: 1.2rem;
+  color: var(--text);
+}
+
+.settings-menu-text {
+  margin: 0;
+  text-align: left;
+  color: var(--wbg);
+  font-size: 0.7rem;
+}
+
+.settings-menu-row {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings-action-button.MuiButton-root {
+  border-radius: 12px;
+  color: var(--wbg);
+  border-color: var(--wbg);
+  text-transform: none;
+  font-size: 0.95rem;
+  width: 100px;
+  height: 40px;
+}
+
+.settings-action-button.MuiButton-root:hover {
+  opacity: 0.75;
+  border-color: var(--wbg);
+}
+
+.settings-action-button-primary.MuiButton-root {
+  background-color: var(--special);
+  color: var(--text);
+}
+
+.settings-action-button-primary.MuiButton-root:hover {
+  background-color: var(--special);
+  opacity: 0.85;
+}
+
+.settings-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-item-label {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.settings-item-row .MuiSwitch-switchBase.Mui-checked {
+  color: var(--special);
+}
+
+.settings-item-row .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track {
+  background-color: var(--special);
+}
+
+.settings-mode-toggle {
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+}
+
+.settings-mode-toggle .MuiToggleButton-root {
+  min-width: 32px;
+  height: 30px;
+  padding: 4px;
+  color: var(--wbg);
+  border: none;
+}
+
+.settings-mode-toggle .MuiToggleButton-root.Mui-selected {
+  background: var(--special);
+  color: var(--text);
+}
+
+.settings-mode-toggle .MuiToggleButton-root:hover {
+  background: var(--accent-bg);
+}
+
+.settings-note {
+  margin: 0;
+  text-align: left;
+  color: var(--wbg);
+  font-size: 0.8rem;
 }
 
 .auth-controls {
@@ -247,6 +363,118 @@
   flex-direction: column;
   justify-content: center;
   /* gap: 18px; */
+}
+
+.live-layout {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.live-controls-card {
+  min-height: 0 !important;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-mode-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.live-mode-divider {
+  border-color: var(--wbg) !important;
+}
+
+.live-fast-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-symbol-link {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.live-symbol-link:hover {
+  text-decoration: underline;
+}
+
+.live-required-symbol {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+  
+.live-unfollow-button.MuiButton-root {
+  /* min-width: 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%; */
+  border-radius: 99px;
+  color: var(--accent);
+}
+
+.live-unfollow-button.MuiButton-root:hover {
+  background: var(--accent-bg);
+}
+
+.live-controls-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.live-action-button.MuiButton-root {
+  height: 40px;
+  min-width: 110px;
+  border-radius: 999px;
+  background: var(--special);
+  color: var(--text);
+  text-transform: none;
+  font-weight: 700;
+}
+
+.live-action-button.MuiButton-root:hover {
+  opacity: 0.88;
+}
+
+.live-alerts-title {
+  text-align: left;
+  margin-top: 6px;
+}
+
+.live-alert-card {
+  min-height: 0 !important;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.live-alert-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.live-alert-field {
+  min-width: 0;
+}
+
+.live-alert-table {
+  max-height: 280px;
 }
 
 .add-divider {
@@ -468,6 +696,18 @@
     grid-template-columns: 1fr;
   }
 
+  .live-controls-row {
+    grid-template-columns: 1fr;
+  }
+
+  .live-alert-form {
+    grid-template-columns: 1fr;
+  }
+
+  .live-mode-row {
+    align-items: flex-start;
+  }
+
   .page {
     padding: 24px 14px;
     gap: 16px;
@@ -490,14 +730,14 @@
     font-size: 16px;
   }
 
-  .currency-picker {
+  /* .currency-picker {
     width: 80px !important;
     height: 32px !important;
-  }
+  } */
 
-  .currency-picker .MuiOutlinedInput-root {
+  /* .currency-picker .MuiOutlinedInput-root {
     height: 32px !important;
-  }
+  } */
 
   .currency-picker .MuiInputLabel-root {
     font-size: 0.7rem !important;
@@ -514,52 +754,112 @@
     gap: 6px;
   }
 
+  .settings-menu-content {
+    width: 250px;
+  }
+
+  .live-mode-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .live-mode-divider {
+    width: 100%;
+    height: 0;
+    border-right: none !important;
+    border-bottom: 1px solid var(--wbg) !important;
+    margin: 0;
+  }
+
   .page {
     padding: 16px 10px;
   }
 }
 
 @media (prefers-color-scheme: light) {
-.user-title {
+  :root:not([data-theme='dark']) .user-title {
     color: var(--text);
   }
 
-  .summary-label {
+  :root:not([data-theme='dark']) .summary-label {
     color: var(--text);
   }
 
-  .summary-card {
+  :root:not([data-theme='dark']) .summary-card {
     background: #fff;
     color: var(--text);
   }
 
-  .chart-card {
+  :root:not([data-theme='dark']) .chart-card {
     background: #fff;
   }
 
-  .chart-title {
+  :root:not([data-theme='dark']) .chart-title {
     color: var(--text);
   }
 
-  .add-form-card {
+  :root:not([data-theme='dark']) .add-form-card {
     background: #fff !important;
   }
 
-  .add-table-button.MuiButton-root {
+  :root:not([data-theme='dark']) .add-table-button.MuiButton-root {
     color: var(--text);
   }
 
-  .add-form-grid .MuiInputBase-root,
-  .add-form-grid .MuiInputLabel-root {
+  :root:not([data-theme='dark']) .add-form-grid .MuiInputBase-root,
+  :root:not([data-theme='dark']) .add-form-grid .MuiInputLabel-root {
     color: var(--text) !important;
   }
   
-  .add-form-triple-row .add-field-stock,
-  .add-form-triple-row .add-field-action,
-  .add-form-triple-row .add-field-quantity,
-  .add-form-name-do-row .add-field-name,
-  .add-form-name-do-row .add-field-do {
+  :root:not([data-theme='dark']) .add-form-triple-row .add-field-stock,
+  :root:not([data-theme='dark']) .add-form-triple-row .add-field-action,
+  :root:not([data-theme='dark']) .add-form-triple-row .add-field-quantity,
+  :root:not([data-theme='dark']) .add-form-name-do-row .add-field-name,
+  :root:not([data-theme='dark']) .add-form-name-do-row .add-field-do {
     color: var(--text) !important;
   }
 
+}
+
+:root[data-theme='light'] .user-title {
+  color: var(--text);
+}
+
+:root[data-theme='light'] .summary-label {
+  color: var(--text);
+}
+
+:root[data-theme='light'] .summary-card {
+  background: #fff;
+  color: var(--text);
+}
+
+:root[data-theme='light'] .chart-card {
+  background: #fff;
+}
+
+:root[data-theme='light'] .chart-title {
+  color: var(--text);
+}
+
+:root[data-theme='light'] .add-form-card {
+  background: #fff !important;
+}
+
+:root[data-theme='light'] .add-table-button.MuiButton-root {
+  color: var(--text);
+}
+
+:root[data-theme='light'] .add-form-grid .MuiInputBase-root,
+:root[data-theme='light'] .add-form-grid .MuiInputLabel-root {
+  color: var(--text) !important;
+}
+
+:root[data-theme='light'] .add-form-triple-row .add-field-stock,
+:root[data-theme='light'] .add-form-triple-row .add-field-action,
+:root[data-theme='light'] .add-form-triple-row .add-field-quantity,
+:root[data-theme='light'] .add-form-name-do-row .add-field-name,
+:root[data-theme='light'] .add-form-name-do-row .add-field-do {
+  color: var(--text) !important;
 }

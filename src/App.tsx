@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Alert from '@mui/material/Alert'
 import CircularProgress from '@mui/material/CircularProgress'
 import MenuItem from '@mui/material/MenuItem'
+import Menu from '@mui/material/Menu'
 import Paper from '@mui/material/Paper'
+import Switch from '@mui/material/Switch'
 import Table from '@mui/material/Table'
 import TableBody from '@mui/material/TableBody'
 import TableCell from '@mui/material/TableCell'
@@ -12,6 +14,7 @@ import TableRow from '@mui/material/TableRow'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Autocomplete from '@mui/material/Autocomplete'
+import Divider from '@mui/material/Divider'
 import TextField from '@mui/material/TextField'
 import type { Session } from '@supabase/supabase-js'
 import {
@@ -21,7 +24,18 @@ import {
   type SheetData,
 } from './sheetsData'
 import { Box, Button } from '@mui/material'
-import { MdDataUsage, MdTableRows, MdOutlineAdd } from 'react-icons/md'
+import {
+  MdDataUsage,
+  MdTableRows,
+  MdOutlineAdd,
+  MdSettings,
+  MdShowChart,
+  MdDeleteOutline,
+  MdBrightnessAuto,
+  MdDarkMode,
+  MdLightMode,
+  MdCancel,
+} from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
 import { BarChart } from '@mui/x-charts/BarChart'
@@ -47,6 +61,12 @@ type HoldingSnapshot = {
 
 type FinnhubQuoteResponse = {
   c?: number
+  d?: number
+  dp?: number
+  h?: number
+  l?: number
+  o?: number
+  pc?: number
 }
 
 type FinnhubMarketStatusResponse = {
@@ -66,9 +86,29 @@ const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i
 const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
 const HOLDINGS_UPDATE_INTERVAL_MS = 10 * 60 * 1000
+const LIVE_QUOTES_NORMAL_INTERVAL_MS = 5 * 60 * 1000
+const LIVE_QUOTES_FAST_INTERVAL_MS = 60 * 1000
+const MARKET_STATUS_UPDATE_INTERVAL_MS = 60 * 1000
 const AUTH_REDIRECT_URL = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim()
+const THEME_STORAGE_KEY = 'stock_theme_mode_v1'
+const NOTIFICATIONS_STORAGE_KEY = 'stock_notifications_enabled_v1'
+const LIVE_SYMBOLS_STORAGE_KEY = 'stock_live_symbols_v1'
+const PRICE_ALERTS_STORAGE_KEY = 'stock_price_alerts_v1'
+const MARKET_OPEN_NOTICE_DAY_KEY = 'stock_market_open_notice_day_v1'
 
 type AddTableName = 'Stocks' | 'Dividend' | 'Money Move'
+type PageName = 'table' | 'dataShow' | 'add' | 'live'
+type ThemeMode = 'system' | 'light' | 'dark'
+type PriceAlertCondition = 'above' | 'below'
+
+type PriceAlert = {
+  id: string
+  symbol: string
+  targetPrice: number
+  condition: PriceAlertCondition
+  enabled: boolean
+  triggered: boolean
+}
 
 type AddFieldConfig = {
   key: string
@@ -339,14 +379,80 @@ function resolveOAuthRedirectUrl(): string {
   }
 }
 
+function normalizeSymbolInput(input: string): string | null {
+  const normalized = input.trim().toUpperCase()
+
+  if (!/^[A-Z.]{1,10}$/.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function getCurrentMarketDayKey(): string {
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function safeReadStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) {
+      return fallback
+    }
+
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+function safeWriteStorage(key: string, value: unknown): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function applyThemeMode(mode: ThemeMode): void {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  if (mode === 'system') {
+    document.documentElement.removeAttribute('data-theme')
+    return
+  }
+
+  document.documentElement.setAttribute('data-theme', mode)
+}
+
 function App() {
   const [stocksData, setStocksData] = useState<SheetData>({ headers: [], rows: [] })
   const [dividendData, setDividendData] = useState<SheetData>({ headers: [], rows: [] })
   const [moneyMoveData, setMoneyMoveData] = useState<SheetData>({ headers: [], rows: [] })
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [page, setPage] = useState<'table' | 'dataShow' | 'add'>('dataShow')
+  const [page, setPage] = useState<PageName>('dataShow')
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD')
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system')
+  const [settingsAnchorEl, setSettingsAnchorEl] = useState<HTMLElement | null>(null)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default',
+  )
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
   const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
   const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
@@ -370,6 +476,17 @@ function App() {
   const [selectedExcelPreviewTable, setSelectedExcelPreviewTable] = useState<AddTableName>('Stocks')
   const [isParsingExcelPreview, setIsParsingExcelPreview] = useState(false)
   const [isConfirmingExcelAdd, setIsConfirmingExcelAdd] = useState(false)
+  const [followSymbolInput, setFollowSymbolInput] = useState('')
+  const [userFollowSymbols, setUserFollowSymbols] = useState<string[]>(['AAPL', 'TSLA'])
+  const [liveQuotes, setLiveQuotes] = useState<Record<string, FinnhubQuoteResponse>>({})
+  const [isLiveQuotesLoading, setIsLiveQuotesLoading] = useState(false)
+  const [liveQuotesUpdatedAt, setLiveQuotesUpdatedAt] = useState<number | null>(null)
+  const [isFastMode, setIsFastMode] = useState(false)
+  const [alertSymbol, setAlertSymbol] = useState('AAPL')
+  const [alertPriceInput, setAlertPriceInput] = useState('')
+  const [alertCondition, setAlertCondition] = useState<PriceAlertCondition>('above')
+  const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>([])
+  const lastKnownMarketOpenRef = useRef<boolean | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const isConfigValid = Boolean(
@@ -456,6 +573,177 @@ function App() {
   }, [selectedAddTable])
 
   useEffect(() => {
+    const storedTheme = safeReadStorage<ThemeMode | null>(THEME_STORAGE_KEY, null)
+    const preferredTheme = storedTheme ?? 'system'
+    setThemeMode(preferredTheme)
+    applyThemeMode(preferredTheme)
+
+    const storedNotificationsEnabled = safeReadStorage<boolean>(NOTIFICATIONS_STORAGE_KEY, false)
+    setNotificationsEnabled(Boolean(storedNotificationsEnabled))
+
+    const storedSymbols = safeReadStorage<string[]>(LIVE_SYMBOLS_STORAGE_KEY, ['AAPL', 'TSLA'])
+    const normalizedSymbols = Array.isArray(storedSymbols)
+      ? storedSymbols
+          .map((symbol) => String(symbol).trim().toUpperCase())
+          .filter((symbol) => /^[A-Z.]{1,10}$/.test(symbol))
+      : ['AAPL', 'TSLA']
+
+    setUserFollowSymbols(normalizedSymbols.length > 0 ? normalizedSymbols : ['AAPL', 'TSLA'])
+    setAlertSymbol((normalizedSymbols[0] ?? 'AAPL').toUpperCase())
+
+    const storedAlerts = safeReadStorage<PriceAlert[]>(PRICE_ALERTS_STORAGE_KEY, [])
+    if (Array.isArray(storedAlerts)) {
+      setPriceAlerts(
+        storedAlerts.filter(
+          (alert) =>
+            typeof alert.id === 'string' &&
+            typeof alert.symbol === 'string' &&
+            typeof alert.targetPrice === 'number' &&
+            Number.isFinite(alert.targetPrice) &&
+            (alert.condition === 'above' || alert.condition === 'below'),
+        ),
+      )
+    }
+  }, [])
+
+  const isSettingsOpen = Boolean(settingsAnchorEl)
+
+  const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
+    setSettingsAnchorEl(event.currentTarget)
+  }
+
+  const handleCloseSettings = () => {
+    setSettingsAnchorEl(null)
+  }
+
+  const handleToggleThemeMode = (
+    _event: React.MouseEvent<HTMLElement>,
+    nextMode: ThemeMode | null,
+  ) => {
+    if (!nextMode) {
+      return
+    }
+
+    setThemeMode(nextMode)
+    safeWriteStorage(THEME_STORAGE_KEY, nextMode)
+    applyThemeMode(nextMode)
+  }
+
+  const sendBrowserNotification = (title: string, body: string) => {
+    if (
+      !notificationsEnabled ||
+      notificationPermission !== 'granted' ||
+      typeof window === 'undefined' ||
+      !('Notification' in window)
+    ) {
+      return
+    }
+
+    new Notification(title, { body })
+  }
+
+  const handleToggleNotifications = async (_event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationsEnabled(false)
+      safeWriteStorage(NOTIFICATIONS_STORAGE_KEY, false)
+      return
+    }
+
+    if (!checked) {
+      setNotificationsEnabled(false)
+      safeWriteStorage(NOTIFICATIONS_STORAGE_KEY, false)
+      return
+    }
+
+    let permission = Notification.permission
+    if (permission === 'default') {
+      permission = await Notification.requestPermission()
+    }
+
+    setNotificationPermission(permission)
+    const enabled = permission === 'granted'
+    setNotificationsEnabled(enabled)
+    safeWriteStorage(NOTIFICATIONS_STORAGE_KEY, enabled)
+  }
+
+  const handleAddFollowSymbol = () => {
+    const symbol = normalizeSymbolInput(followSymbolInput)
+
+    if (!symbol) {
+      return
+    }
+
+    setUserFollowSymbols((prev) => {
+      if (prev.includes(symbol)) {
+        return prev
+      }
+
+      const next = [symbol, ...prev]
+      safeWriteStorage(LIVE_SYMBOLS_STORAGE_KEY, next)
+      return next
+    })
+
+    setFollowSymbolInput('')
+  }
+
+  const handleUnfollowSymbol = (symbol: string) => {
+    if (requiredHoldingSymbolSet.has(symbol)) {
+      return
+    }
+
+    setUserFollowSymbols((prev) => {
+      const next = prev.filter((item) => item !== symbol)
+      safeWriteStorage(LIVE_SYMBOLS_STORAGE_KEY, next)
+      return next
+    })
+  }
+
+  const handleAddPriceAlert = () => {
+    const symbol = alertSymbol.trim().toUpperCase()
+    const targetPrice = Number(alertPriceInput)
+
+    if (!symbol || !Number.isFinite(targetPrice) || targetPrice <= 0) {
+      return
+    }
+
+    const nextAlert: PriceAlert = {
+      id: `${symbol}-${Date.now()}`,
+      symbol,
+      targetPrice,
+      condition: alertCondition,
+      enabled: true,
+      triggered: false,
+    }
+
+    setPriceAlerts((prev) => {
+      const next = [nextAlert, ...prev]
+      safeWriteStorage(PRICE_ALERTS_STORAGE_KEY, next)
+      return next
+    })
+    setAlertPriceInput('')
+  }
+
+  const handleTogglePriceAlert = (alertId: string) => {
+    setPriceAlerts((prev) => {
+      const next = prev.map((alert) =>
+        alert.id === alertId
+          ? { ...alert, enabled: !alert.enabled, triggered: false }
+          : alert,
+      )
+      safeWriteStorage(PRICE_ALERTS_STORAGE_KEY, next)
+      return next
+    })
+  }
+
+  const handleDeletePriceAlert = (alertId: string) => {
+    setPriceAlerts((prev) => {
+      const next = prev.filter((alert) => alert.id !== alertId)
+      safeWriteStorage(PRICE_ALERTS_STORAGE_KEY, next)
+      return next
+    })
+  }
+
+  useEffect(() => {
     let isMounted = true
 
     const applySession = async (session: Session | null) => {
@@ -506,6 +794,15 @@ function App() {
       isMounted = false
       subscription.unsubscribe()
     }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('denied')
+      return
+    }
+
+    setNotificationPermission(Notification.permission)
   }, [])
 
   const handleGoogleSignIn = async () => {
@@ -916,6 +1213,23 @@ function App() {
       .sort((a, b) => a.symbol.localeCompare(b.symbol))
   }, [stocksData])
 
+  const requiredHoldingSymbols = useMemo(() => holdings.map((holding) => holding.symbol), [holdings])
+
+  const requiredHoldingSymbolSet = useMemo(
+    () => new Set(requiredHoldingSymbols),
+    [requiredHoldingSymbols],
+  )
+
+  const liveSymbols = useMemo(() => {
+    const merged = [...requiredHoldingSymbols, ...userFollowSymbols]
+    return Array.from(new Set(merged))
+  }, [requiredHoldingSymbols, userFollowSymbols])
+
+  const followSymbolOptions = useMemo(() => {
+    const symbols = [...requiredHoldingSymbols, ...userFollowSymbols, ...Object.keys(liveQuotes)]
+    return Array.from(new Set(symbols)).sort((a, b) => a.localeCompare(b))
+  }, [requiredHoldingSymbols, userFollowSymbols, liveQuotes])
+
   useEffect(() => {
     const loadCurrencyRates = async () => {
       const cachedRaw = getCookie(CURRENCY_COOKIE_KEY)
@@ -1073,6 +1387,187 @@ function App() {
       window.clearInterval(timer)
     }
   }, [holdings])
+
+  useEffect(() => {
+    if (liveSymbols.length === 0) {
+      setAlertSymbol('')
+      return
+    }
+
+    if (!liveSymbols.includes(alertSymbol)) {
+      setAlertSymbol(liveSymbols[0])
+    }
+  }, [liveSymbols, alertSymbol])
+
+  useEffect(() => {
+    if (!FINNHUB_TOKEN || liveSymbols.length === 0) {
+      setLiveQuotes({})
+      setIsLiveQuotesLoading(false)
+      return
+    }
+
+    let isCancelled = false
+
+    const fetchLiveQuotes = async () => {
+      setIsLiveQuotesLoading(true)
+
+      try {
+        const marketStatusResponse = await fetch(
+          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
+        )
+
+        if (marketStatusResponse.ok) {
+          const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
+          if (!isCancelled) {
+            setIsUsMarketOpen(marketStatus.isOpen === true)
+          }
+        } else if (!isCancelled) {
+          setIsUsMarketOpen(null)
+        }
+
+        const quoteResults = await Promise.all(
+          liveSymbols.map(async (symbol) => {
+            const quoteResponse = await fetch(
+              `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_TOKEN}`,
+            )
+
+            if (!quoteResponse.ok) {
+              return [symbol, {} as FinnhubQuoteResponse] as const
+            }
+
+            const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
+            return [symbol, quote] as const
+          }),
+        )
+
+        if (isCancelled) {
+          return
+        }
+
+        const nextQuotes: Record<string, FinnhubQuoteResponse> = {}
+        quoteResults.forEach(([symbol, quote]) => {
+          nextQuotes[symbol] = quote
+        })
+
+        setLiveQuotes(nextQuotes)
+        setLiveQuotesUpdatedAt(Date.now())
+      } catch {
+        if (!isCancelled) {
+          setIsUsMarketOpen(null)
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLiveQuotesLoading(false)
+        }
+      }
+    }
+
+    const intervalMs =
+      isUsMarketOpen === true
+        ? isFastMode
+          ? LIVE_QUOTES_FAST_INTERVAL_MS
+          : LIVE_QUOTES_NORMAL_INTERVAL_MS
+        : LIVE_QUOTES_NORMAL_INTERVAL_MS
+
+    void fetchLiveQuotes()
+    const timer = window.setInterval(fetchLiveQuotes, intervalMs)
+
+    return () => {
+      isCancelled = true
+      window.clearInterval(timer)
+    }
+  }, [liveSymbols, isFastMode, isUsMarketOpen])
+
+  useEffect(() => {
+    if (!notificationsEnabled || !FINNHUB_TOKEN) {
+      return
+    }
+
+    let isCancelled = false
+
+    const pollMarketStatus = async () => {
+      try {
+        const response = await fetch(
+          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
+        )
+
+        if (!response.ok || isCancelled) {
+          return
+        }
+
+        const marketStatus = (await response.json()) as FinnhubMarketStatusResponse
+        const isOpen = marketStatus.isOpen === true
+        const previousOpen = lastKnownMarketOpenRef.current
+        const marketDayKey = getCurrentMarketDayKey()
+        const notifiedDay = safeReadStorage<string | null>(MARKET_OPEN_NOTICE_DAY_KEY, null)
+
+        if (isOpen && (previousOpen === false || notifiedDay !== marketDayKey)) {
+          sendBrowserNotification('US Market Open', 'US stock market is now open.')
+          safeWriteStorage(MARKET_OPEN_NOTICE_DAY_KEY, marketDayKey)
+        }
+
+        lastKnownMarketOpenRef.current = isOpen
+      } catch {
+        // Ignore market status polling errors.
+      }
+    }
+
+    void pollMarketStatus()
+    const timer = window.setInterval(pollMarketStatus, MARKET_STATUS_UPDATE_INTERVAL_MS)
+
+    return () => {
+      isCancelled = true
+      window.clearInterval(timer)
+    }
+  }, [notificationsEnabled])
+
+  useEffect(() => {
+    if (!notificationsEnabled || notificationPermission !== 'granted') {
+      return
+    }
+
+    setPriceAlerts((prev) => {
+      let didChange = false
+
+      const next = prev.map((alert) => {
+        if (!alert.enabled) {
+          return alert
+        }
+
+        const currentPrice = liveQuotes[alert.symbol]?.c
+        if (!Number.isFinite(currentPrice)) {
+          return alert
+        }
+
+        const matchCondition =
+          alert.condition === 'above'
+            ? Number(currentPrice) >= alert.targetPrice
+            : Number(currentPrice) <= alert.targetPrice
+
+        if (matchCondition && !alert.triggered) {
+          sendBrowserNotification(
+            'Price Alert',
+            `${alert.symbol} is ${alert.condition} ${alert.targetPrice.toFixed(2)}. Current: ${Number(currentPrice).toFixed(2)}`,
+          )
+          didChange = true
+          return { ...alert, triggered: true }
+        }
+
+        if (!matchCondition && alert.triggered) {
+          didChange = true
+          return { ...alert, triggered: false }
+        }
+
+        return alert
+      })
+
+      if (didChange) {
+        safeWriteStorage(PRICE_ALERTS_STORAGE_KEY, next)
+      }
+
+      return next
+    })
+  }, [liveQuotes, notificationsEnabled, notificationPermission])
 
   const summary = useMemo(() => {
     const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
@@ -1707,6 +2202,18 @@ function App() {
     )
   }
 
+  const formatLiveQuoteValue = (value: number | undefined, type: 'price' | 'change' | 'percent') => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return '-'
+    }
+
+    if (type === 'percent') {
+      return `${value.toFixed(2)}%`
+    }
+
+    return value.toFixed(2)
+  }
+
   return (
     <main className="page">
       <header className="page-header">
@@ -1784,90 +2291,156 @@ function App() {
           >
             <MdOutlineAdd size={20} />
           </Button>
+          <Button
+            variant={page === 'live' ? 'contained' : 'outlined'}
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                },
+              },
+            }}
+            onClick={() => setPage('live')}
+          >
+            <MdShowChart size={20} />
+          </Button>
         </div>
         <div className="header-controls">
-          {currentUserId && (
-            <Autocomplete
-              className="currency-picker"
-              sx={{
-                width: '100px',
-                height: '40px',
-                '& .MuiOutlinedInput-root': {
-                  height: '40px',
-                  borderRadius: '12px',
-                  borderColor: 'var(--special)',
-                  color: 'var(--text)',
-                  '& fieldset': { borderColor: 'var(--wbg)', color: 'var(--wbg)' },
-                  '&:hover fieldset': { borderColor: 'var(--wbg)', opacity: 0.92},
-                  '&.Mui-focused fieldset': { borderColor: 'var(--special)', borderWidth: '1px', color: 'var(--text)' },
-                },
-                '& .MuiInputLabel-root': { color: 'var(--wbg)', fontSize: '0.85rem' },
-                '& .MuiInputLabel-root.Mui-focused': { color: 'var(--special)' },
-                '& .MuiSvgIcon-root': { color: 'var(--text)' },
-              }}
-              size="small"
-              disableClearable
-              options={[...CURRENCY_OPTIONS]}
-              value={selectedCurrency}
-              onChange={(_, value) => setSelectedCurrency(value)}
-              renderInput={(params) => <TextField {...params} label="Currency" />}
-            />
-          )}
+          <Button
+            aria-haspopup="menu"
+            aria-expanded={isSettingsOpen ? 'true' : undefined}
+            aria-controls={isSettingsOpen ? 'header-settings-menu' : undefined}
+            variant="outlined"
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&:hover': {
+                borderColor: 'var(--wbg)',
+                opacity: 0.85,
+              },
+            }}
+            onClick={handleOpenSettings}
+          >
+            <MdSettings size={20} />
+          </Button>
 
-          <div className="auth-controls">
-            {currentUserId ? (
-              <Button
-                variant="outlined"
-                onClick={handleSignOut}
-                sx={{
-                  borderRadius: '12px',
-                  color: 'var(--wbg)',
-                  borderColor: 'var(--wbg)',
-                  textTransform: 'none',
-                  fontSize: '0.95rem',
-                  padding: '6px 12px',
-                  width: '100px',
-                  height: '40px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  whiteSpace: 'nowrap',
-                  '&:hover': {
-                    backgroundColor: 'transparent',
-                    opacity: 0.75,
-                    borderColor: 'var(--wbg)',
-                  },
-                }}
-              >
-                Logout
-              </Button>
-            ) : (
-              <Button
-                variant="contained"
-                onClick={handleGoogleSignIn}
-                sx={{
-                  borderRadius: '12px',
-                  backgroundColor: 'var(--special)',
-                  color: 'var(--text)',
-                  textTransform: 'none',
-                  fontSize: '0.95rem',
-                  padding: '6px 12px',
-                  width: '100px',
-                  height: '40px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  whiteSpace: 'nowrap',
-                  '&:hover': {
-                    backgroundColor: 'var(--special)',
-                    opacity: 0.85,
-                  },
-                }}
-              >
-                Login
-              </Button>
-            )}
-          </div>
+          <Menu
+            id="header-settings-menu"
+            anchorEl={settingsAnchorEl}
+            open={isSettingsOpen}
+            onClose={handleCloseSettings}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            slotProps={{
+              paper: {
+                className: 'settings-menu-paper',
+              },
+            }}
+          >
+            <Box className="settings-menu-content">
+              {currentUserName && currentUserEmail && currentUserId &&
+                <Box>
+                  <Box className="settings-menu-header">
+                    <h3 className="settings-menu-title">{currentUserName}</h3>
+                    <Button
+                    variant="outlined"
+                    onClick={handleSignOut}
+                    className="settings-action-button"
+                    >
+                      Logout
+                    </Button>
+                  </Box>
+                  <p className="settings-menu-text">{currentUserEmail}</p>
+                  <p className="settings-menu-text">ID: {currentUserId}</p>
+                </Box>
+              }
+              <div className="settings-menu-row">
+                {!currentUserId && (
+                  <Button
+                    variant="contained"
+                    onClick={handleGoogleSignIn}
+                    className="settings-action-button settings-action-button-primary"
+                  >
+                    Login
+                  </Button>
+                )}
+              </div>
+
+              {currentUserId ? (
+                <Autocomplete
+                  className="currency-picker settings-currency-picker"
+                  sx={{
+                    width: '100%',
+                    '& .MuiOutlinedInput-root': {
+                      height: '40px',
+                      borderRadius: '12px',
+                      color: 'var(--text)',
+                      '& fieldset': { borderColor: 'var(--wbg)' },
+                      '&:hover fieldset': { borderColor: 'var(--wbg)', opacity: 0.92 },
+                      '&.Mui-focused fieldset': { borderColor: 'var(--special)', borderWidth: '1px' },
+                    },
+                    '& .MuiInputLabel-root': { color: 'var(--wbg)', fontSize: '0.85rem' },
+                    '& .MuiInputLabel-root.Mui-focused': { color: 'var(--special)' },
+                    '& .MuiSvgIcon-root': { color: 'var(--text)' },
+                  }}
+                  size="small"
+                  disableClearable
+                  options={[...CURRENCY_OPTIONS]}
+                  value={selectedCurrency}
+                  onChange={(_, value) => setSelectedCurrency(value)}
+                  renderInput={(params) => <TextField {...params} label="Currency" />}
+                />
+              ) : null}
+
+              <Box className="settings-item-row">
+                <p className="settings-item-label">Mode</p>
+                <ToggleButtonGroup
+                  value={themeMode}
+                  exclusive
+                  size="small"
+                  onChange={handleToggleThemeMode}
+                  className="settings-mode-toggle"
+                  aria-label="Theme mode"
+                >
+                  <ToggleButton value="system" aria-label="System mode" title="System">
+                    <MdBrightnessAuto size={16} />
+                  </ToggleButton>
+                  <ToggleButton value="dark" aria-label="Dark mode" title="Dark">
+                    <MdDarkMode size={16} />
+                  </ToggleButton>
+                  <ToggleButton value="light" aria-label="Light mode" title="Light">
+                    <MdLightMode size={16} />
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+
+              <Box className="settings-item-row">
+                <p className="settings-item-label">Notifications</p>
+                <Switch checked={notificationsEnabled} onChange={handleToggleNotifications} />
+              </Box>
+
+              {notificationPermission === 'denied' ? (
+                <p className="settings-note">Browser notifications are blocked. Enable them in browser settings.</p>
+              ) : null}
+            </Box>
+          </Menu>
         </div>
         </Box>
       </header>
@@ -2104,6 +2677,266 @@ function App() {
                 </TableContainer>
               </Box>
             </Box>
+            </Box>
+          ) : page === 'live' ? (
+            <Box>
+              <h1 className="sheet-title text-black">Live US Stocks</h1>
+              <Box className="live-layout">
+                <Paper elevation={0} className="add-form-card live-controls-card">
+                  <Box className="live-controls-row">
+                    <Autocomplete
+                      freeSolo
+                      options={followSymbolOptions}
+                      fullWidth
+                      inputValue={followSymbolInput}
+                      onInputChange={(_, value) => setFollowSymbolInput(value.toUpperCase())}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="Search symbol to follow"
+                          variant="standard"
+                          helperText="No comma or space. Example: NVDA"
+                        />
+                      )}
+                    />
+                    <Button
+                      variant="contained"
+                      onClick={handleAddFollowSymbol}
+                      className="live-action-button"
+                    >
+                      Add
+                    </Button>
+                  </Box>
+
+                  <Box className="live-mode-row">
+                    <p className="holdings-status">
+                      {`Market: ${
+                        isUsMarketOpen === true
+                          ? 'Open'
+                          : isUsMarketOpen === false
+                            ? 'Closed'
+                            : 'Unknown'
+                      }`}
+                    </p>
+
+                    <Divider orientation="vertical" flexItem className="live-mode-divider" />
+
+                    <p className="holdings-status">
+                      {liveQuotesUpdatedAt
+                        ? `Last update: ${new Date(liveQuotesUpdatedAt).toLocaleTimeString()}`
+                        : ''}
+                    </p>
+
+                    <Divider orientation="vertical" flexItem className="live-mode-divider" />
+
+                    <p className="holdings-status">
+                      {isLiveQuotesLoading ? 'Updating quotes...' : 'Quotes ready'}
+                    </p>
+
+                    <Divider orientation="vertical" flexItem className="live-mode-divider" />
+
+                    <p className="holdings-status">
+                      {`Interval: ${
+                        isUsMarketOpen === true
+                          ? isFastMode
+                            ? '1 min (fast mode)'
+                            : '5 min (normal mode)'
+                          : '5 min'
+                      }`}
+                    </p>
+
+                    <Box className="live-fast-mode-toggle">
+                      <p className="holdings-status">Fast mode (1 min)</p>
+                      <Switch
+                        checked={isFastMode}
+                        onChange={(_, checked) => setIsFastMode(checked)}
+                        size="small"
+                      />
+                    </Box>
+                  </Box>
+                </Paper>
+
+                <TableContainer component={Paper} elevation={0} className="table-shell">
+                  <Table size="small" aria-label="live us stocks table">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 700 }}>Stocks</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Current</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Change</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>% change</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Highest</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Lowest</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Open</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Prev Close</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Action</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {liveSymbols.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={9}>No symbols selected.</TableCell>
+                        </TableRow>
+                      ) : (
+                        liveSymbols.map((symbol) => {
+                          const quote = liveQuotes[symbol] ?? {}
+                          const changeValue = quote.d
+                          const percentValue = quote.dp
+                          const isRequiredHolding = requiredHoldingSymbolSet.has(symbol)
+
+                          return (
+                            <TableRow key={symbol}>
+                              <TableCell>
+                                <a
+                                  href={`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="live-symbol-link"
+                                >
+                                  {symbol}
+                                </a>
+                              </TableCell>
+                              <TableCell>{formatLiveQuoteValue(quote.c, 'price')}</TableCell>
+                              <TableCell
+                                className={
+                                  typeof changeValue === 'number' && Number.isFinite(changeValue)
+                                    ? changeValue >= 0
+                                      ? 'value-positive'
+                                      : 'value-negative'
+                                    : undefined
+                                }
+                              >
+                                {formatLiveQuoteValue(changeValue, 'change')}
+                              </TableCell>
+                              <TableCell
+                                className={
+                                  typeof percentValue === 'number' && Number.isFinite(percentValue)
+                                    ? percentValue >= 0
+                                      ? 'value-positive'
+                                      : 'value-negative'
+                                    : undefined
+                                }
+                              >
+                                {formatLiveQuoteValue(percentValue, 'percent')}
+                              </TableCell>
+                              <TableCell>{formatLiveQuoteValue(quote.h, 'price')}</TableCell>
+                              <TableCell>{formatLiveQuoteValue(quote.l, 'price')}</TableCell>
+                              <TableCell>{formatLiveQuoteValue(quote.o, 'price')}</TableCell>
+                              <TableCell>{formatLiveQuoteValue(quote.pc, 'price')}</TableCell>
+                              <TableCell>
+                                {isRequiredHolding ? (
+                                  <span className="live-required-symbol">Holding</span>
+                                ) : (
+                                  <Button
+                                    variant="text"
+                                    className="live-unfollow-button"
+                                    onClick={() => handleUnfollowSymbol(symbol)}
+                                    aria-label={`Unfollow ${symbol}`}
+                                  >
+                                    <MdCancel size={20} />
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+
+              <h1 className="sheet-title text-black">Price Alerts</h1>
+              <Box className="live-layout">
+                <Paper elevation={0} className="add-form-card live-alert-card">
+                  <Box className="live-alert-form">
+                    <TextField
+                      select
+                      variant="standard"
+                      label="Stock"
+                      value={alertSymbol}
+                      onChange={(event) => setAlertSymbol(event.target.value.toUpperCase())}
+                      className="live-alert-field"
+                    >
+                      {liveSymbols.map((symbol) => (
+                        <MenuItem key={`alert-symbol-${symbol}`} value={symbol}>
+                          {symbol}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+
+                    <TextField
+                      variant="standard"
+                      label="Target price"
+                      type="number"
+                      value={alertPriceInput}
+                      onChange={(event) => setAlertPriceInput(event.target.value)}
+                      className="live-alert-field"
+                      inputProps={{ step: '0.01', min: '0' }}
+                    />
+
+                    <TextField
+                      select
+                      variant="standard"
+                      label="Condition"
+                      value={alertCondition}
+                      onChange={(event) => setAlertCondition(event.target.value as PriceAlertCondition)}
+                      className="live-alert-field"
+                    >
+                      <MenuItem value="above">Above</MenuItem>
+                      <MenuItem value="below">Below</MenuItem>
+                    </TextField>
+
+                    <Button variant="contained" onClick={handleAddPriceAlert} className="live-action-button">
+                      Add Alert
+                    </Button>
+                  </Box>
+
+                  <TableContainer component={Paper} elevation={0} className="table-shell live-alert-table">
+                    <Table size="small" aria-label="price alerts table">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Stock</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Condition</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Target</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Enabled</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Action</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {priceAlerts.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5}>No alerts set.</TableCell>
+                          </TableRow>
+                        ) : (
+                          priceAlerts.map((alert) => (
+                            <TableRow key={alert.id}>
+                              <TableCell>{alert.symbol}</TableCell>
+                              <TableCell>{alert.condition === 'above' ? 'Above' : 'Below'}</TableCell>
+                              <TableCell>{alert.targetPrice.toFixed(2)}</TableCell>
+                              <TableCell>
+                                <Switch
+                                  checked={alert.enabled}
+                                  onChange={() => handleTogglePriceAlert(alert.id)}
+                                  size="small"
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="outlined"
+                                  onClick={() => handleDeletePriceAlert(alert.id)}
+                                  sx={{ minWidth: 36, width: 36, height: 36, borderRadius: '50%' }}
+                                >
+                                  <MdDeleteOutline size={18} />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Paper>
+              </Box>
             </Box>
           ) : page === 'add' ? (
             <Box className="add-layout">
