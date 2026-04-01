@@ -2293,6 +2293,30 @@ function App() {
           >
             <MdDataUsage size={20} />
           </Button>
+          <Button
+            variant={page === 'live' ? 'contained' : 'outlined'}
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                },
+              },
+            }}
+            onClick={() => setPage('live')}
+          >
+            <MdShowChart size={20} />
+          </Button>
           <Button 
             variant={page === 'table' ? 'contained' : 'outlined'} 
             sx={{
@@ -2341,31 +2365,8 @@ function App() {
           >
             <MdOutlineAdd size={20} />
           </Button>
-          <Button
-            variant={page === 'live' ? 'contained' : 'outlined'}
-            sx={{
-              width: 40,
-              minWidth: 40,
-              height: 40,
-              padding: 0,
-              borderRadius: '50%',
-              backgroundColor: 'var(--bg)',
-              color: 'var(--wbg)',
-              borderColor: 'var(--wbg)',
-              '&.MuiButton-contained': {
-                backgroundColor: 'var(--special)',
-                color: 'var(--text)',
-                '&:hover': {
-                  borderColor: 'var(--accent)',
-                  opacity: 0.92,
-                },
-              },
-            }}
-            onClick={() => setPage('live')}
-          >
-            <MdShowChart size={20} />
-          </Button>
         </div>
+
         <div className="header-controls page-nav">
           <Button
             aria-haspopup="menu"
