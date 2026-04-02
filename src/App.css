@@ -398,7 +398,7 @@
 }
 
 .live-symbol-link {
-  color: var(--text);
+  color: var(--special);
   font-weight: 700;
   text-decoration: none;
 }
@@ -424,6 +424,15 @@
 }
 
 .live-unfollow-button.MuiButton-root:hover {
+  background: var(--accent-bg);
+}
+
+.live-edit-button.MuiButton-root {
+  border-radius: 99px;
+  color: var(--accent);
+}
+
+.live-edit-button.MuiButton-root:hover {
   background: var(--accent-bg);
 }
 
@@ -620,6 +629,26 @@
 
 .add-form-grid .MuiAlert-root {
   grid-column: 1 / -1;
+}
+
+.edit-form-grid .add-form-pair-row,
+.edit-form-grid .add-form-triple-row,
+.edit-form-grid .add-form-name-do-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.edit-form-grid .add-field-stock,
+.edit-form-grid .add-field-action,
+.edit-form-grid .add-field-quantity,
+.edit-form-grid .add-field-currency,
+.edit-form-grid .add-field-value,
+.edit-form-grid .add-field-name,
+.edit-form-grid .add-field-do {
+  width: 100px !important;
+  max-width: 100px !important;
+  min-width: 100px !important;
 }
 
 .excel-section {
@@ -863,3 +892,7 @@
 :root[data-theme='light'] .add-form-name-do-row .add-field-do {
   color: var(--text) !important;
 }
+
+/* :root[data-theme='dark'] .live-symbol-link {
+  color: var(--bg) !important;
+} */

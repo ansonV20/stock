@@ -1,4 +1,3 @@
-import type { SheetData } from './sheetsData'
 import { supabase } from './supabaseClient'
 
 export type AppUser = {
@@ -8,6 +7,7 @@ export type AppUser = {
 }
 
 type StockRow = {
+  id?: string
   stock: string
   currency: string
   price: number
@@ -18,6 +18,7 @@ type StockRow = {
 }
 
 type DividendRow = {
+  id?: string
   stock: string
   currency: string
   div: number
@@ -25,6 +26,7 @@ type DividendRow = {
 }
 
 type MoneyMoveRow = {
+  id?: string
   name: string
   currency: string
   price: number
@@ -32,13 +34,18 @@ type MoneyMoveRow = {
   action: string
 }
 
+export type SheetDataWithIds = {
+  headers: string[]
+  rows: string[][]
+  ids: string[]
+}
+
+export type UserTableName = 'Stocks' | 'Dividend' | 'Money Move'
+export type RowMutationAction = 'update' | 'delete'
+
 const STOCK_HEADERS = ['Stock', 'Currency', 'Price', 'Action', 'Time', 'Quantity', 'Handling Fees']
 const DIVIDEND_HEADERS = ['Stock', 'Currency', 'Div', 'Time']
 const MONEY_MOVE_HEADERS = ['Name', 'Currency', 'Price', 'Time', 'Action']
-
-function toSheetData(headers: string[], rows: string[][]): SheetData {
-  return { headers, rows }
-}
 
 function normalizeNumberInput(value: string): number {
   const parsed = Number(value)
@@ -65,24 +72,24 @@ export async function ensureUserProfile(userId: string, fullName: string, email:
 }
 
 export async function loadUserSheetData(userId: string): Promise<{
-  stocks: SheetData
-  dividend: SheetData
-  moneyMove: SheetData
+  stocks: SheetDataWithIds
+  dividend: SheetDataWithIds
+  moneyMove: SheetDataWithIds
 }> {
   const [stocksResult, dividendResult, moneyMoveResult] = await Promise.all([
     supabase
       .from('stocks')
-      .select('stock, currency, price, action, time, quantity, handling_fees')
+      .select('id, stock, currency, price, action, time, quantity, handling_fees')
       .eq('user_id', userId)
       .order('time', { ascending: true }),
     supabase
       .from('dividend')
-      .select('stock, currency, div, time')
+      .select('id, stock, currency, div, time')
       .eq('user_id', userId)
       .order('time', { ascending: true }),
     supabase
       .from('money_move')
-      .select('name, currency, price, time, action')
+      .select('id, name, currency, price, time, action')
       .eq('user_id', userId)
       .order('time', { ascending: true }),
   ])
@@ -106,6 +113,7 @@ export async function loadUserSheetData(userId: string): Promise<{
     String(row.quantity ?? ''),
     String(row.handling_fees ?? ''),
   ])
+  const stocksIds = (stocksResult.data ?? []).map((row: StockRow) => row.id ?? '')
 
   const dividendRows = (dividendResult.data ?? []).map((row: DividendRow) => [
     row.stock ?? '',
@@ -113,6 +121,7 @@ export async function loadUserSheetData(userId: string): Promise<{
     String(row.div ?? ''),
     row.time ?? '',
   ])
+  const dividendIds = (dividendResult.data ?? []).map((row: DividendRow) => row.id ?? '')
 
   const moneyMoveRows = (moneyMoveResult.data ?? []).map((row: MoneyMoveRow) => [
     row.name ?? '',
@@ -121,17 +130,18 @@ export async function loadUserSheetData(userId: string): Promise<{
     row.time ?? '',
     row.action ?? '',
   ])
+  const moneyMoveIds = (moneyMoveResult.data ?? []).map((row: MoneyMoveRow) => row.id ?? '')
 
   return {
-    stocks: toSheetData(STOCK_HEADERS, stocksRows),
-    dividend: toSheetData(DIVIDEND_HEADERS, dividendRows),
-    moneyMove: toSheetData(MONEY_MOVE_HEADERS, moneyMoveRows),
+    stocks: { headers: STOCK_HEADERS, rows: stocksRows, ids: stocksIds },
+    dividend: { headers: DIVIDEND_HEADERS, rows: dividendRows, ids: dividendIds },
+    moneyMove: { headers: MONEY_MOVE_HEADERS, rows: moneyMoveRows, ids: moneyMoveIds },
   }
 }
 
 export async function insertUserRow(
   userId: string,
-  table: 'Stocks' | 'Dividend' | 'Money Move',
+  table: UserTableName,
   row: Record<string, string>,
 ): Promise<void> {
   if (table === 'Stocks') {
@@ -182,4 +192,128 @@ export async function insertUserRow(
   if (error) {
     throw new Error(error.message)
   }
+}
+
+export async function updateUserRow(
+  table: UserTableName,
+  recordId: string,
+  row: Record<string, string>,
+): Promise<void> {
+  // console.log('Updating row', { table, recordId, row }) 
+  if (table === 'Stocks') {
+    const payload = {
+      stock: row.stock,
+      currency: row.currency,
+      price: normalizeNumberInput(row.price),
+      action: row.action,
+      time: row.time,
+      quantity: normalizeNumberInput(row.quantity),
+      handling_fees: normalizeNumberInput(row.handlingFees ?? '0'),
+    }
+
+    const { error } = await supabase
+      .from('stocks')
+      .update(payload)
+      .eq('id', recordId)
+      .select()
+    // console.log('Update result', { table, recordId, payload, error })
+    if (error) {
+      console.error('[Supabase][stocks][update] failed', {
+        table,
+        recordId,
+        payload,
+        error,
+      })
+      throw new Error(error.message)
+    }
+    return
+  }
+
+  if (table === 'Dividend') {
+    const payload = {
+      stock: row.stock,
+      currency: row.currency,
+      div: normalizeNumberInput(row.div),
+      time: row.time,
+    }
+
+    const { error } = await supabase
+      .from('dividend')
+      .update(payload)
+      .eq('id', recordId)
+      .select()
+    if (error) {
+      console.error('[Supabase][dividend][update] failed', {
+        table,
+        recordId,
+        payload,
+        error,
+      })
+      throw new Error(error.message)
+    }
+    return
+  }
+
+  const payload = {
+    name: row.name,
+    currency: row.currency,
+    price: normalizeNumberInput(row.price),
+    time: row.time,
+    action: row.do,
+  }
+
+  const { error } = await supabase
+    .from('money_move')
+    .update(payload)
+    .eq('id', recordId)
+    .select()
+  if (error) {
+    console.error('[Supabase][money_move][update] failed', {
+      table,
+      recordId,
+      payload,
+      error,
+    })
+    throw new Error(error.message)
+  }
+}
+
+export async function deleteUserRow(
+  table: UserTableName,
+  recordId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from(table === 'Stocks' ? 'stocks' : table === 'Dividend' ? 'dividend' : 'money_move')
+    .delete()
+    .eq('id', recordId)
+    .select()
+
+  if (error) {
+    console.error('[Supabase][delete] failed', {
+      table,
+      recordId,
+      error,
+    })
+    throw new Error(error.message)
+  }
+}
+
+export async function mutateUserRowAndReload(
+  userId: string,
+  table: UserTableName,
+  recordId: string,
+  action: RowMutationAction,
+  row: Record<string, string>,
+): Promise<{
+  stocks: SheetDataWithIds
+  dividend: SheetDataWithIds
+  moneyMove: SheetDataWithIds
+}> {
+  if (action === 'delete') {
+    await deleteUserRow(table, recordId)
+  } else {
+    await updateUserRow(table, recordId, row)
+  }
+
+  return loadUserSheetData(userId)
 }

@@ -23,7 +23,7 @@ import {
   resolveAction,
   type SheetData,
 } from './sheetsData'
-import { Box, Button } from '@mui/material'
+import { Box, Button, Modal } from '@mui/material'
 import {
   MdDataUsage,
   MdTableRows,
@@ -35,12 +35,19 @@ import {
   MdDarkMode,
   MdLightMode,
   MdCancel,
+  MdEdit
 } from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
 import { BarChart } from '@mui/x-charts/BarChart'
 import { supabase } from './supabaseClient'
-import { ensureUserProfile, insertUserRow, loadUserSheetData } from './supabaseData'
+import {
+  ensureUserProfile,
+  insertUserRow,
+  loadUserSheetData,
+  mutateUserRowAndReload,
+  type SheetDataWithIds,
+} from './supabaseData'
 import { downloadExcelTemplate, parseExcelFile, excelRowToObject, type ExcelDataRow } from './excelData'
 import './App.css'
 
@@ -73,6 +80,11 @@ type FinnhubMarketStatusResponse = {
   isOpen?: boolean
 }
 
+type LiveSymbolsCookiePayload = {
+  user: string
+  followList: string[]
+}
+
 const DEFAULT_RATES: Record<CurrencyCode, number> = {
   USD: 1,
   HKD: 7.8,
@@ -85,7 +97,6 @@ const CURRENCY_API_URL =
 const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i0d6pcdu9r01qo88aim4ig'
 const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
-const HOLDINGS_UPDATE_INTERVAL_MS = 10 * 60 * 1000
 const LIVE_QUOTES_NORMAL_INTERVAL_MS = 5 * 60 * 1000
 const LIVE_QUOTES_FAST_INTERVAL_MS = 60 * 1000
 const MARKET_STATUS_UPDATE_INTERVAL_MS = 60 * 1000
@@ -93,6 +104,7 @@ const AUTH_REDIRECT_URL = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim()
 const THEME_STORAGE_KEY = 'stock_theme_mode_v1'
 const NOTIFICATIONS_STORAGE_KEY = 'stock_notifications_enabled_v1'
 const LIVE_SYMBOLS_STORAGE_KEY = 'stock_live_symbols_v1'
+const LIVE_SYMBOLS_COOKIE_KEY = 'stock_live_symbols_cookie_v1'
 const PRICE_ALERTS_STORAGE_KEY = 'stock_price_alerts_v1'
 const MARKET_OPEN_NOTICE_DAY_KEY = 'stock_market_open_notice_day_v1'
 const NOTIFICATION_SW_PATH = '/notification-sw.js'
@@ -390,6 +402,34 @@ function normalizeSymbolInput(input: string): string | null {
   return normalized
 }
 
+function sanitizeSymbols(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const normalized = input
+    .map((symbol) => String(symbol).trim().toUpperCase())
+    .filter((symbol) => /^[A-Z.]{1,10}$/.test(symbol))
+
+  return Array.from(new Set(normalized))
+}
+
+function resolveLiveQuotePrice(quote: FinnhubQuoteResponse | undefined): number {
+  if (!quote) {
+    return Number.NaN
+  }
+
+  if (typeof quote.c === 'number' && Number.isFinite(quote.c) && quote.c > 0) {
+    return quote.c
+  }
+
+  if (typeof quote.pc === 'number' && Number.isFinite(quote.pc) && quote.pc > 0) {
+    return quote.pc
+  }
+
+  return Number.NaN
+}
+
 function getCurrentMarketDayKey(): string {
   const date = new Date()
   const year = date.getFullYear()
@@ -441,9 +481,9 @@ function applyThemeMode(mode: ThemeMode): void {
 }
 
 function App() {
-  const [stocksData, setStocksData] = useState<SheetData>({ headers: [], rows: [] })
-  const [dividendData, setDividendData] = useState<SheetData>({ headers: [], rows: [] })
-  const [moneyMoveData, setMoneyMoveData] = useState<SheetData>({ headers: [], rows: [] })
+  const [stocksData, setStocksData] = useState<SheetDataWithIds>({ headers: [], rows: [], ids: [] })
+  const [dividendData, setDividendData] = useState<SheetDataWithIds>({ headers: [], rows: [], ids: [] })
+  const [moneyMoveData, setMoneyMoveData] = useState<SheetDataWithIds>({ headers: [], rows: [], ids: [] })
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState<PageName>('dataShow')
@@ -455,7 +495,6 @@ function App() {
     typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default',
   )
   const [currencyRates, setCurrencyRates] = useState<Record<CurrencyCode, number>>(DEFAULT_RATES)
-  const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, number>>({})
   const [isUsMarketOpen, setIsUsMarketOpen] = useState<boolean | null>(null)
   // const [isQuoteLoading, setIsQuoteLoading] = useState(false)
   // const [quoteUpdatedAt, setQuoteUpdatedAt] = useState<number | null>(null)
@@ -487,7 +526,15 @@ function App() {
   const [alertPriceInput, setAlertPriceInput] = useState('')
   const [alertCondition, setAlertCondition] = useState<PriceAlertCondition>('above')
   const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>([])
+  const [editingTable, setEditingTable] = useState<AddTableName | null>(null)
+  const [editingRowIndex, setEditingRowIndex] = useState<number | null>(null)
+  const [editFormValues, setEditFormValues] = useState<Record<string, string>>({})
+  const [isConfirmingEdit, setIsConfirmingEdit] = useState(false)
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
+  const [editFormMessage, setEditFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
   const lastKnownMarketOpenRef = useRef<boolean | null>(null)
+  const userSymbolsReadyForIdRef = useRef<string | null>(null)
   const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -582,16 +629,8 @@ function App() {
 
     const storedNotificationsEnabled = safeReadStorage<boolean>(NOTIFICATIONS_STORAGE_KEY, false)
     setNotificationsEnabled(Boolean(storedNotificationsEnabled))
-
-    const storedSymbols = safeReadStorage<string[]>(LIVE_SYMBOLS_STORAGE_KEY, ['AAPL', 'TSLA'])
-    const normalizedSymbols = Array.isArray(storedSymbols)
-      ? storedSymbols
-          .map((symbol) => String(symbol).trim().toUpperCase())
-          .filter((symbol) => /^[A-Z.]{1,10}$/.test(symbol))
-      : ['AAPL', 'TSLA']
-
-    setUserFollowSymbols(normalizedSymbols.length > 0 ? normalizedSymbols : ['AAPL', 'TSLA'])
-    setAlertSymbol((normalizedSymbols[0] ?? 'AAPL').toUpperCase())
+    setUserFollowSymbols(['AAPL', 'TSLA'])
+    setAlertSymbol('AAPL')
 
     const storedAlerts = safeReadStorage<PriceAlert[]>(PRICE_ALERTS_STORAGE_KEY, [])
     if (Array.isArray(storedAlerts)) {
@@ -607,6 +646,53 @@ function App() {
       )
     }
   }, [])
+
+  useEffect(() => {
+    if (!currentUserId) {
+      userSymbolsReadyForIdRef.current = null
+      setUserFollowSymbols(['AAPL', 'TSLA'])
+      return
+    }
+
+    const cookieRaw = getCookie(LIVE_SYMBOLS_COOKIE_KEY)
+    if (!cookieRaw) {
+      const legacySymbols = sanitizeSymbols(safeReadStorage<string[]>(LIVE_SYMBOLS_STORAGE_KEY, []))
+      setUserFollowSymbols(legacySymbols.length > 0 ? legacySymbols : ['AAPL', 'TSLA'])
+      userSymbolsReadyForIdRef.current = currentUserId
+      return
+    }
+
+    try {
+      const payload = JSON.parse(cookieRaw) as LiveSymbolsCookiePayload
+
+      if (payload.user !== currentUserId) {
+        setUserFollowSymbols(['AAPL', 'TSLA'])
+        userSymbolsReadyForIdRef.current = currentUserId
+        return
+      }
+
+      const nextSymbols = sanitizeSymbols(payload.followList)
+      setUserFollowSymbols(nextSymbols.length > 0 ? nextSymbols : ['AAPL', 'TSLA'])
+      userSymbolsReadyForIdRef.current = currentUserId
+    } catch {
+      setUserFollowSymbols(['AAPL', 'TSLA'])
+      userSymbolsReadyForIdRef.current = currentUserId
+    }
+  }, [currentUserId])
+
+  useEffect(() => {
+    if (!currentUserId || userSymbolsReadyForIdRef.current !== currentUserId) {
+      return
+    }
+
+    const payload: LiveSymbolsCookiePayload = {
+      user: currentUserId,
+      followList: sanitizeSymbols(userFollowSymbols),
+    }
+
+    setCookie(LIVE_SYMBOLS_COOKIE_KEY, JSON.stringify(payload), COOKIE_TTL_MS / 1000)
+    safeWriteStorage(LIVE_SYMBOLS_STORAGE_KEY, payload.followList)
+  }, [currentUserId, userFollowSymbols])
 
   const isSettingsOpen = Boolean(settingsAnchorEl)
 
@@ -724,9 +810,7 @@ function App() {
         return prev
       }
 
-      const next = [symbol, ...prev]
-      safeWriteStorage(LIVE_SYMBOLS_STORAGE_KEY, next)
-      return next
+      return [symbol, ...prev]
     })
 
     setFollowSymbolInput('')
@@ -738,9 +822,7 @@ function App() {
     }
 
     setUserFollowSymbols((prev) => {
-      const next = prev.filter((item) => item !== symbol)
-      safeWriteStorage(LIVE_SYMBOLS_STORAGE_KEY, next)
-      return next
+      return prev.filter((item) => item !== symbol)
     })
   }
 
@@ -789,6 +871,185 @@ function App() {
     })
   }
 
+  const handleOpenEditModal = (table: AddTableName, rowIndex: number) => {
+    setEditingTable(table)
+    setEditingRowIndex(rowIndex)
+    setEditFormMessage(null)
+
+    let data: SheetDataWithIds
+    if (table === 'Stocks') {
+      data = stocksData
+    } else if (table === 'Dividend') {
+      data = dividendData
+    } else {
+      data = moneyMoveData
+    }
+
+    const row = data.rows[rowIndex]
+    if (!row) {
+      return
+    }
+
+    const formValues: Record<string, string> = {}
+    data.headers.forEach((header, colIndex) => {
+      const value = row[colIndex] ?? ''
+      const key = header
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .split(' ')
+        .map((word, i) => (i === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+        .join('')
+
+      if (key === 'time' || key === 'date') {
+        const parsed = parseDateValue(value)
+        if (parsed) {
+          formValues['time'] = parsed.toISOString().slice(0, 16)
+        }
+      } else if (key === 'action' && table === 'Money Move') {
+        formValues['do'] = value
+      } else {
+        formValues[key] = value
+      }
+    })
+
+    setEditFormValues(formValues)
+    setIsConfirmingEdit(false)
+    setIsConfirmingDelete(false)
+  }
+
+  const handleCloseEditModal = () => {
+    setEditingTable(null)
+    setEditingRowIndex(null)
+    setEditFormValues({})
+    setIsConfirmingEdit(false)
+    setIsConfirmingDelete(false)
+    setEditFormMessage(null)
+  }
+
+  const handleEditFieldChange = (fieldKey: string, value: string) => {
+    setIsConfirmingEdit(false)
+    setEditFormValues((prev) => ({ ...prev, [fieldKey]: value }))
+  }
+
+  const handleSubmitEditDelete = async (action: 'update' | 'delete') => {
+    if (action === 'delete') {
+      if (!isConfirmingDelete) {
+        setIsConfirmingEdit(false)
+        setIsConfirmingDelete(true)
+        return
+      }
+
+      if (!editingTable || editingRowIndex === null || !currentUserId) {
+        setEditFormMessage({ type: 'error', text: 'Invalid edit state' })
+        return
+      }
+
+      let data: SheetDataWithIds
+      if (editingTable === 'Stocks') {
+        data = stocksData
+      } else if (editingTable === 'Dividend') {
+        data = dividendData
+      } else {
+        data = moneyMoveData
+      }
+
+      const recordId = data.ids[editingRowIndex]
+      if (!recordId) {
+        setEditFormMessage({ type: 'error', text: 'Record ID not found' })
+        return
+      }
+
+      setIsSubmittingEdit(true)
+
+      try {
+        const { stocks, dividend, moneyMove } = await mutateUserRowAndReload(
+          currentUserId,
+          editingTable,
+          recordId,
+          'delete',
+          editFormValues,
+        )
+        setStocksData(stocks)
+        setDividendData(dividend)
+        setMoneyMoveData(moneyMove)
+
+        handleCloseEditModal()
+        setEditFormMessage(null)
+      } catch (err) {
+        console.error('[Edit/Delete][Delete] failed', {
+          table: editingTable,
+          rowIndex: editingRowIndex,
+          recordId,
+          formValues: editFormValues,
+          error: err,
+        })
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        setEditFormMessage({ type: 'error', text: `Failed to delete row. ${message}` })
+      } finally {
+        setIsSubmittingEdit(false)
+        setIsConfirmingDelete(false)
+      }
+    } else {
+      // Update action
+      if (!isConfirmingEdit) {
+        setIsConfirmingDelete(false)
+        setIsConfirmingEdit(true)
+        return
+      }
+
+      if (!editingTable || editingRowIndex === null || !currentUserId) {
+        setEditFormMessage({ type: 'error', text: 'Invalid edit state' })
+        return
+      }
+
+      let data: SheetDataWithIds
+      if (editingTable === 'Stocks') {
+        data = stocksData
+      } else if (editingTable === 'Dividend') {
+        data = dividendData
+      } else {
+        data = moneyMoveData
+      }
+
+      const recordId = data.ids[editingRowIndex]
+      if (!recordId) {
+        setEditFormMessage({ type: 'error', text: 'Record ID not found' })
+        return
+      }
+
+      setIsSubmittingEdit(true)
+
+      try {
+        const { stocks, dividend, moneyMove } = await mutateUserRowAndReload(
+          currentUserId,
+          editingTable,
+          recordId,
+          'update',
+          editFormValues,
+        )
+        setStocksData(stocks)
+        setDividendData(dividend)
+        setMoneyMoveData(moneyMove)
+
+        handleCloseEditModal()
+        setEditFormMessage(null)
+      } catch (err) {
+        console.error('[Edit/Delete][Update] failed', {
+          table: editingTable,
+          rowIndex: editingRowIndex,
+          recordId,
+          formValues: editFormValues,
+          error: err,
+        })
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        setEditFormMessage({ type: 'error', text: `Failed to update row. ${message}` })
+      } finally {
+        setIsSubmittingEdit(false)
+        setIsConfirmingEdit(false)
+      }
+    }
+  }
+
   useEffect(() => {
     let isMounted = true
 
@@ -814,7 +1075,7 @@ function App() {
 
       setCurrentUserId(user.id)
       setCurrentUserName(fullName)
-      setCurrentUserEmail(typeof user.email === 'string' ? user.email : null) 
+      setCurrentUserEmail(typeof user.email === 'string' ? user.email : null)
       setIsAuthReady(true)
 
       try {
@@ -879,9 +1140,9 @@ function App() {
     setCurrentUserId(null)
     setCurrentUserName('')
     setCurrentUserEmail(null)
-    setStocksData({ headers: [], rows: [] })
-    setDividendData({ headers: [], rows: [] })
-    setMoneyMoveData({ headers: [], rows: [] })
+    setStocksData({ headers: [], rows: [], ids: [] })
+    setDividendData({ headers: [], rows: [], ids: [] })
+    setMoneyMoveData({ headers: [], rows: [], ids: [] })
   }
 
   const handleAddFieldChange = (fieldKey: string, value: string) => {
@@ -945,6 +1206,59 @@ function App() {
         required={Boolean(field.required)}
         value={addFormValues[field.key] ?? ''}
         onChange={(event) => handleAddFieldChange(field.key, event.target.value)}
+        inputProps={field.inputType === 'number' && field.step ? { step: field.step } : undefined}
+      />
+    )
+  }
+
+  const renderEditField = (field: AddFieldConfig, className?: string) => {
+    if (field.inputType === 'select') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          select
+          variant="standard"
+          label={field.label}
+          required={Boolean(field.required)}
+          value={editFormValues[field.key] ?? ''}
+          onChange={(event) => handleEditFieldChange(field.key, event.target.value)}
+        >
+          {(field.options ?? []).map((option) => (
+            <MenuItem key={`${field.key}-${option}`} value={option}>
+              {option}
+            </MenuItem>
+          ))}
+        </TextField>
+      )
+    }
+
+    if (field.inputType === 'datetime') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          label={field.label}
+          type="datetime-local"
+          variant="standard"
+          required={Boolean(field.required)}
+          value={editFormValues[field.key] ?? ''}
+          onChange={(event) => handleEditFieldChange(field.key, event.target.value)}
+          InputLabelProps={{ shrink: true }}
+        />
+      )
+    }
+
+    return (
+      <TextField
+        key={field.key}
+        className={className}
+        label={field.label}
+        type={field.inputType === 'number' ? 'number' : 'text'}
+        variant="standard"
+        required={Boolean(field.required)}
+        value={editFormValues[field.key] ?? ''}
+        onChange={(event) => handleEditFieldChange(field.key, event.target.value)}
         inputProps={field.inputType === 'number' && field.step ? { step: field.step } : undefined}
       />
     )
@@ -1350,95 +1664,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!FINNHUB_TOKEN || holdings.length === 0) {
-      // setIsQuoteLoading(false)
-      return
-    }
-
-    let isCancelled = false
-
-    const fetchHoldingsQuotes = async () => {
-      // setIsQuoteLoading(true)
-
-      try {
-        const marketStatusResponse = await fetch(
-          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
-        )
-
-        if (!marketStatusResponse.ok) {
-          if (!isCancelled) {
-            setIsUsMarketOpen(null)
-          }
-          return
-        }
-
-        const marketStatus = (await marketStatusResponse.json()) as FinnhubMarketStatusResponse
-        const marketOpen = marketStatus.isOpen === true
-
-        if (!isCancelled) {
-          setIsUsMarketOpen(marketOpen)
-        }
-
-        if (!marketOpen) {
-          return
-        }
-
-        const quoteResults = await Promise.all(
-          holdings.map(async (holding) => {
-            const quoteResponse = await fetch(
-              `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(holding.symbol)}&token=${FINNHUB_TOKEN}`,
-            )
-
-            if (!quoteResponse.ok) {
-              return [holding.symbol, Number.NaN] as const
-            }
-
-            const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
-            const currentPrice = quote.c
-
-            return [
-              holding.symbol,
-              typeof currentPrice === 'number' && Number.isFinite(currentPrice)
-                ? currentPrice
-                : Number.NaN,
-            ] as const
-          }),
-        )
-
-        if (isCancelled) {
-          return
-        }
-
-        const nextQuotes: Record<string, number> = {}
-        quoteResults.forEach(([symbol, price]) => {
-          if (Number.isFinite(price)) {
-            nextQuotes[symbol] = price
-          }
-        })
-
-        setQuotesBySymbol(nextQuotes)
-        // setQuoteUpdatedAt(Date.now())
-      } catch {
-        if (!isCancelled) {
-          setIsUsMarketOpen(null)
-        }
-      } finally {
-        if (!isCancelled) {
-          // setIsQuoteLoading(false)
-        }
-      }
-    }
-
-    void fetchHoldingsQuotes()
-    const timer = window.setInterval(fetchHoldingsQuotes, HOLDINGS_UPDATE_INTERVAL_MS)
-
-    return () => {
-      isCancelled = true
-      window.clearInterval(timer)
-    }
-  }, [holdings])
-
-  useEffect(() => {
     if (liveSymbols.length === 0) {
       setAlertSymbol('')
       return
@@ -1482,7 +1707,7 @@ function App() {
             )
 
             if (!quoteResponse.ok) {
-              return [symbol, {} as FinnhubQuoteResponse] as const
+              return [symbol, null] as const
             }
 
             const quote = (await quoteResponse.json()) as FinnhubQuoteResponse
@@ -1496,10 +1721,20 @@ function App() {
 
         const nextQuotes: Record<string, FinnhubQuoteResponse> = {}
         quoteResults.forEach(([symbol, quote]) => {
-          nextQuotes[symbol] = quote
+          if (quote) {
+            nextQuotes[symbol] = quote
+          }
         })
 
-        setLiveQuotes(nextQuotes)
+        setLiveQuotes((prev) => {
+          const merged = { ...prev, ...nextQuotes }
+          liveSymbols.forEach((symbol) => {
+            if (!(symbol in merged)) {
+              merged[symbol] = {}
+            }
+          })
+          return merged
+        })
         setLiveQuotesUpdatedAt(Date.now())
       } catch {
         if (!isCancelled) {
@@ -2013,7 +2248,7 @@ function App() {
   const holdingsDonutChart = useMemo(() => {
     const data = holdings
       .map((holding, index) => {
-        const nowPriceUsd = quotesBySymbol[holding.symbol]
+        const nowPriceUsd = resolveLiveQuotePrice(liveQuotes[holding.symbol])
         const priceUsd = Number.isFinite(nowPriceUsd) ? nowPriceUsd : holding.avgBuyPriceUsd
         const priceInSelectedCurrency = convertAmount(
           priceUsd,
@@ -2031,7 +2266,7 @@ function App() {
       .filter((item) => Number.isFinite(item.value) && item.value > 0)
 
     return data
-  }, [holdings, quotesBySymbol, selectedCurrency, currencyRates])
+  }, [holdings, liveQuotes, selectedCurrency, currencyRates])
 
   const monthlyEarnChart = useMemo(() => {
     const monthEarnMap = new Map<string, number>()
@@ -2104,9 +2339,9 @@ function App() {
     }
 
     if (!currentUserId) {
-      setStocksData({ headers: [], rows: [] })
-      setDividendData({ headers: [], rows: [] })
-      setMoneyMoveData({ headers: [], rows: [] })
+      setStocksData({ headers: [], rows: [], ids: [] })
+      setDividendData({ headers: [], rows: [], ids: [] })
+      setMoneyMoveData({ headers: [], rows: [], ids: [] })
       setError(null)
       setIsLoading(false)
       return
@@ -2233,6 +2468,7 @@ function App() {
                     {data.headers[headerIndex]}
                   </TableCell>
                 ))}
+                <TableCell sx={{ fontWeight: 700 }}>Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -2243,12 +2479,179 @@ function App() {
                       {formatCellValue(row[colIndex] ?? '', data.headers[colIndex] ?? '')}
                     </TableCell>
                   ))}
+                  <TableCell>
+                    <Button
+                      variant="text"
+                      className="live-edit-button"
+                      onClick={() => handleOpenEditModal(title as AddTableName, rowIndex)}
+                      aria-label={`Edit row ${rowIndex}`}
+                    >
+                      <MdEdit size={20} />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </TableContainer>
       </Box>
+    )
+  }
+
+  const renderEditModal = () => {
+    if (!editingTable || editingRowIndex === null) {
+      return null
+    }
+
+    const editFields = ADD_FORM_CONFIG[editingTable]
+
+    return (
+      <Modal
+        open={editingTable !== null && editingRowIndex !== null}
+        onClose={handleCloseEditModal}
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+        }}
+      >
+        <Paper
+          elevation={8}
+          className="add-form-card"
+          sx={{
+            width: '90%',
+            maxWidth: '600px',
+            height: 'auto',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            backgroundColor: 'var(--bg)',
+            color: 'var(--text)',
+            padding: '2rem',
+          }}
+        >
+          <Box component="form" className="add-form-grid edit-form-grid">
+            <h2 style={{ textAlign: 'center', marginBottom: '1.5rem', color: 'var(--text)' }}>Edit {editingTable}</h2>
+
+            {editFields.map((field) => {
+              const pairedFieldKey = editingTable === 'Dividend' ? 'div' : 'price'
+
+              if (editingTable === 'Stocks' && field.key === 'stock') {
+                const actionField = editFields.find((candidate) => candidate.key === 'action')
+                const quantityField = editFields.find((candidate) => candidate.key === 'quantity')
+
+                return (
+                  <Box className="add-form-triple-row" key="stocks-main-row">
+                    {renderEditField(field, 'add-field-stock')}
+                    {actionField ? renderEditField(actionField, 'add-field-action') : null}
+                    {quantityField ? renderEditField(quantityField, 'add-field-quantity') : null}
+                  </Box>
+                )
+              }
+
+              if (editingTable === 'Stocks' && (field.key === 'action' || field.key === 'quantity')) {
+                return null
+              }
+
+              if (editingTable === 'Money Move' && field.key === 'name') {
+                const doField = editFields.find((candidate) => candidate.key === 'do')
+
+                return (
+                  <Box className="add-form-name-do-row" key="money-move-name-do-row">
+                    {renderEditField(field, 'add-field-name')}
+                    {doField ? renderEditField(doField, 'add-field-do') : null}
+                  </Box>
+                )
+              }
+
+              if (editingTable === 'Money Move' && field.key === 'do') {
+                return null
+              }
+
+              if (field.key === pairedFieldKey) {
+                return null
+              }
+
+              if (field.key === 'currency') {
+                const pairedField = editFields.find((candidate) => candidate.key === pairedFieldKey)
+
+                return (
+                  <Box className="add-form-pair-row" key={`pair-${editingTable}-${pairedFieldKey}`}>
+                    {renderEditField(field, 'add-field-currency')}
+                    {pairedField ? renderEditField(pairedField, 'add-field-value') : null}
+                  </Box>
+                )
+              }
+
+              return renderEditField(field)
+            })}
+
+            {editFormMessage ? (
+              <Alert severity={editFormMessage.type}>{editFormMessage.text}</Alert>
+            ) : null}
+
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                marginTop: '1.5rem',
+              }}
+            >
+              <Button
+                type="button"
+                variant="contained"
+                disabled={isSubmittingEdit || !currentUserId}
+                className={isConfirmingDelete ? 'is-confirming' : ''}
+                onClick={() => handleSubmitEditDelete('delete')}
+                sx={{
+                  backgroundColor: 'var(--special)',
+                  color: 'var(--text)',
+                  '&:hover': {
+                    backgroundColor: 'var(--accent)',
+                    opacity: 0.92,
+                  },
+                  '&:disabled': {
+                    backgroundColor: 'var(--special)',
+                    opacity: 0.5,
+                  },
+                }}
+              >
+                {isSubmittingEdit
+                  ? 'Deleting...'
+                  : isConfirmingDelete
+                    ? 'Confirm Delete'
+                    : 'Delete'}
+              </Button>
+
+              <Button
+                type="button"
+                variant="contained"
+                disabled={isSubmittingEdit || !currentUserId}
+                className={isConfirmingEdit ? 'is-confirming' : ''}
+                onClick={() => handleSubmitEditDelete('update')}
+                sx={{
+                  backgroundColor: '#000000',
+                  color: 'var(--text)',
+                  '&:hover': {
+                    backgroundColor: '#333333',
+                    opacity: 0.92,
+                  },
+                  '&:disabled': {
+                    backgroundColor: '#000000',
+                    opacity: 0.5,
+                  },
+                }}
+              >
+                {isSubmittingEdit
+                  ? 'Saving...'
+                  : isConfirmingEdit
+                    ? 'Confirm Change'
+                    : 'Change'}
+              </Button>
+            </Box>
+          </Box>
+        </Paper>
+      </Modal>
     )
   }
 
@@ -2496,6 +2899,7 @@ function App() {
         </Box>
       </header>
 
+      {renderEditModal()}
 
       {isLoading ? (
         <div className="state-block" role="status" aria-live="polite">
@@ -2637,7 +3041,7 @@ function App() {
 
               <Box className="sheet-section dashboard-holdings">
                 {/* <div className="holdings-header"> */}
-                  <h1 className="sheet-title text-black">Current Holdings (US)</h1>
+                  <h1 className="sheet-title text-black">Current Holdings</h1>
                   {/* <p className="holdings-status">
                     {isUsMarketOpen === true
                       ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
@@ -2667,7 +3071,7 @@ function App() {
                         </TableRow>
                       ) : (
                         holdings.map((holding) => {
-                          const nowPriceUsd = quotesBySymbol[holding.symbol]
+                          const nowPriceUsd = resolveLiveQuotePrice(liveQuotes[holding.symbol])
                           const nowPrice = Number.isFinite(nowPriceUsd)
                             ? convertAmount(nowPriceUsd, 'USD', selectedCurrency, currencyRates)
                             : Number.NaN
