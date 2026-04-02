@@ -420,7 +420,7 @@
   height: 40px;
   border-radius: 50%; */
   border-radius: 99px;
-  color: var(--accent);
+  color: #b91c1c;
 }
 
 .live-unfollow-button.MuiButton-root:hover {
@@ -624,7 +624,7 @@
 }
 
 .add-form-actions .MuiButton-root.is-confirming {
-  background: var(--special);
+  background: var(--special) !important;
 }
 
 .add-form-grid .MuiAlert-root {
@@ -692,6 +692,33 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: none;
   }
+}
+
+.edit-form-button {
+  display: flex;
+  justify-content: space-between;
+  /* gap: 1rem,
+  marginTop: 1.5rem, */
+}
+
+.edit-form-button .MuiButton-root {
+  border-radius: 999px;
+  background-color: #000000;
+  color: var(--text);
+} 
+
+.edit-form-button .delete {
+  background-color: #b91c1c;
+  color: var(--text);
+}
+
+.edit-form-button .delete:hover {
+  background-color: #b91c1c;
+  opacity: 0.88;
+}
+
+.edit-form-button .MuiButton-root.is-confirming {
+  background-color: var(--special) !important;
 }
 
 @media (max-width: 768px) {
@@ -893,6 +920,6 @@
   color: var(--text) !important;
 }
 
-/* :root[data-theme='dark'] .live-symbol-link {
-  color: var(--bg) !important;
-} */
+:root[data-theme='light'] .edit-form-button .MuiButton-root {
+  color: var(--bg);
+}

@@ -30,7 +30,6 @@ import {
   MdOutlineAdd,
   MdSettings,
   MdShowChart,
-  MdDeleteOutline,
   MdBrightnessAuto,
   MdDarkMode,
   MdLightMode,
@@ -99,7 +98,10 @@ const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
 const LIVE_QUOTES_NORMAL_INTERVAL_MS = 5 * 60 * 1000
 const LIVE_QUOTES_FAST_INTERVAL_MS = 60 * 1000
-const MARKET_STATUS_UPDATE_INTERVAL_MS = 60 * 1000
+const MARKET_OPEN_CHECK_INTERVAL_MS = 15 * 1000
+const US_MARKET_TIME_ZONE = 'America/New_York'
+const US_MARKET_OPEN_MINUTES = 9 * 60 + 30
+const US_MARKET_CLOSE_MINUTES = 16 * 60
 const AUTH_REDIRECT_URL = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim()
 const THEME_STORAGE_KEY = 'stock_theme_mode_v1'
 const NOTIFICATIONS_STORAGE_KEY = 'stock_notifications_enabled_v1'
@@ -431,11 +433,41 @@ function resolveLiveQuotePrice(quote: FinnhubQuoteResponse | undefined): number 
 }
 
 function getCurrentMarketDayKey(): string {
-  const date = new Date()
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+  const marketDateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: US_MARKET_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+
+  const year = marketDateParts.find((part) => part.type === 'year')?.value ?? '0000'
+  const month = marketDateParts.find((part) => part.type === 'month')?.value ?? '00'
+  const day = marketDateParts.find((part) => part.type === 'day')?.value ?? '00'
+
   return `${year}-${month}-${day}`
+}
+
+function getCurrentUsMarketClock(): { weekday: string; minutesSinceMidnight: number } {
+  const marketTimeParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: US_MARKET_TIME_ZONE,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+
+  const weekday = marketTimeParts.find((part) => part.type === 'weekday')?.value ?? ''
+  const hour = Number(marketTimeParts.find((part) => part.type === 'hour')?.value ?? '0')
+  const minute = Number(marketTimeParts.find((part) => part.type === 'minute')?.value ?? '0')
+
+  return {
+    weekday,
+    minutesSinceMidnight: hour * 60 + minute,
+  }
+}
+
+function isUsTradingDay(weekday: string): boolean {
+  return weekday !== 'Sat' && weekday !== 'Sun'
 }
 
 function safeReadStorage<T>(key: string, fallback: T): T {
@@ -533,7 +565,6 @@ function App() {
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editFormMessage, setEditFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
-  const lastKnownMarketOpenRef = useRef<boolean | null>(null)
   const userSymbolsReadyForIdRef = useRef<string | null>(null)
   const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1770,41 +1801,33 @@ function App() {
 
     let isCancelled = false
 
-    const pollMarketStatus = async () => {
-      try {
-        const response = await fetch(
-          `${FINNHUB_MARKET_STATUS_URL}?exchange=US&token=${FINNHUB_TOKEN}`,
-        )
+    const checkMarketOpenNotification = () => {
+      if (isCancelled) {
+        return
+      }
 
-        if (!response.ok || isCancelled) {
-          return
-        }
+      const marketDayKey = getCurrentMarketDayKey()
+      const notifiedDay = safeReadStorage<string | null>(MARKET_OPEN_NOTICE_DAY_KEY, null)
+      const marketClock = getCurrentUsMarketClock()
+      const isMarketSessionOpen =
+        isUsTradingDay(marketClock.weekday) &&
+        marketClock.minutesSinceMidnight >= US_MARKET_OPEN_MINUTES &&
+        marketClock.minutesSinceMidnight < US_MARKET_CLOSE_MINUTES
 
-        const marketStatus = (await response.json()) as FinnhubMarketStatusResponse
-        const isOpen = marketStatus.isOpen === true
-        const previousOpen = lastKnownMarketOpenRef.current
-        const marketDayKey = getCurrentMarketDayKey()
-        const notifiedDay = safeReadStorage<string | null>(MARKET_OPEN_NOTICE_DAY_KEY, null)
-
-        if (isOpen && (previousOpen === false || notifiedDay !== marketDayKey)) {
-          sendBrowserNotification('US Market Open', 'US stock market is now open.')
-          safeWriteStorage(MARKET_OPEN_NOTICE_DAY_KEY, marketDayKey)
-        }
-
-        lastKnownMarketOpenRef.current = isOpen
-      } catch {
-        // Ignore market status polling errors.
+      if (isMarketSessionOpen && notifiedDay !== marketDayKey) {
+        sendBrowserNotification('US Market Open', 'US stock market is now open.')
+        safeWriteStorage(MARKET_OPEN_NOTICE_DAY_KEY, marketDayKey)
       }
     }
 
-    void pollMarketStatus()
-    const timer = window.setInterval(pollMarketStatus, MARKET_STATUS_UPDATE_INTERVAL_MS)
+    checkMarketOpenNotification()
+    const timer = window.setInterval(checkMarketOpenNotification, MARKET_OPEN_CHECK_INTERVAL_MS)
 
     return () => {
       isCancelled = true
       window.clearInterval(timer)
     }
-  }, [notificationsEnabled])
+  }, [notificationsEnabled, notificationPermission])
 
   useEffect(() => {
     if (!notificationsEnabled || notificationPermission !== 'granted') {
@@ -2590,36 +2613,37 @@ function App() {
             ) : null}
 
             <Box
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: '1rem',
-                marginTop: '1.5rem',
-              }}
+              className="edit-form-button"
+              // sx={{
+              //   display: 'flex',
+              //   justifyContent: 'space-between',
+              //   gap: '1rem',
+              //   marginTop: '1.5rem',
+              // }}
             >
               <Button
                 type="button"
                 variant="contained"
                 disabled={isSubmittingEdit || !currentUserId}
-                className={isConfirmingDelete ? 'is-confirming' : ''}
+                className={isConfirmingDelete ? 'is-confirming' : 'delete'}
                 onClick={() => handleSubmitEditDelete('delete')}
-                sx={{
-                  backgroundColor: 'var(--special)',
-                  color: 'var(--text)',
-                  '&:hover': {
-                    backgroundColor: 'var(--accent)',
-                    opacity: 0.92,
-                  },
-                  '&:disabled': {
-                    backgroundColor: 'var(--special)',
-                    opacity: 0.5,
-                  },
-                }}
+                // sx={{
+                //   backgroundColor: 'var(--special)',
+                //   color: 'var(--text)',
+                //   '&:hover': {
+                //     backgroundColor: 'var(--accent)',
+                //     opacity: 0.92,
+                //   },
+                //   '&:disabled': {
+                //     backgroundColor: 'var(--special)',
+                //     opacity: 0.5,
+                //   },
+                // }}
               >
                 {isSubmittingEdit
                   ? 'Deleting...'
                   : isConfirmingDelete
-                    ? 'Confirm Delete'
+                    ? 'Confirm'
                     : 'Delete'}
               </Button>
 
@@ -2629,23 +2653,24 @@ function App() {
                 disabled={isSubmittingEdit || !currentUserId}
                 className={isConfirmingEdit ? 'is-confirming' : ''}
                 onClick={() => handleSubmitEditDelete('update')}
-                sx={{
-                  backgroundColor: '#000000',
-                  color: 'var(--text)',
-                  '&:hover': {
-                    backgroundColor: '#333333',
-                    opacity: 0.92,
-                  },
-                  '&:disabled': {
-                    backgroundColor: '#000000',
-                    opacity: 0.5,
-                  },
-                }}
+                // sx={{
+                //   backgroundColor: '#000000',
+                //   borderRadius: '99px',
+                //   color: 'var(--bg)',
+                //   '&:hover': {
+                //     backgroundColor: '#333333',
+                //     opacity: 0.92,
+                //   },
+                //   '&:disabled': {
+                //     backgroundColor: '#000000',
+                //     opacity: 0.5,
+                //   },
+                // }}
               >
                 {isSubmittingEdit
                   ? 'Saving...'
                   : isConfirmingEdit
-                    ? 'Confirm Change'
+                    ? 'Confirm'
                     : 'Change'}
               </Button>
             </Box>
@@ -3375,15 +3400,31 @@ function App() {
                                   size="small"
                                 />
                               </TableCell>
+                              {/* ewL */}
                               <TableCell>
                                 <Button
-                                  variant="outlined"
+                                  variant="text"
+                                  className="live-unfollow-button"
                                   onClick={() => handleDeletePriceAlert(alert.id)}
                                   sx={{ minWidth: 36, width: 36, height: 36, borderRadius: '50%' }}
                                 >
-                                  <MdDeleteOutline size={18} />
+                                  <MdCancel size={20} />
                                 </Button>
                               </TableCell>
+                              {/* <TableCell>
+                                {isRequiredHolding ? (
+                                  <span className="live-required-symbol">Holding</span>
+                                ) : (
+                                  <Button
+                                    variant="text"
+                                    className="live-unfollow-button"
+                                    onClick={() => handleUnfollowSymbol(symbol)}
+                                    aria-label={`Unfollow ${symbol}`}
+                                  >
+                                    <MdCancel size={20} />
+                                  </Button>
+                                )}
+                              </TableCell> */}
                             </TableRow>
                           ))
                         )}
