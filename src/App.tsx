@@ -30,6 +30,7 @@ import {
   MdOutlineAdd,
   MdSettings,
   MdShowChart,
+  MdTrendingUp,
   MdBrightnessAuto,
   MdDarkMode,
   MdLightMode,
@@ -39,12 +40,18 @@ import {
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
 import { BarChart } from '@mui/x-charts/BarChart'
+import { Gauge } from '@mui/x-charts/Gauge'
 import { supabase } from './supabaseClient'
 import {
+  deleteUserGoal,
   ensureUserProfile,
+  insertUserGoal,
   insertUserRow,
+  loadUserGoals,
   loadUserSheetData,
   mutateUserRowAndReload,
+  type GoalRow,
+  type GoalScheduleType,
   type SheetDataWithIds,
 } from './supabaseData'
 import { downloadExcelTemplate, parseExcelFile, excelRowToObject, type ExcelDataRow } from './excelData'
@@ -92,8 +99,8 @@ const DEFAULT_RATES: Record<CurrencyCode, number> = {
 const CURRENCY_COOKIE_KEY = 'currency_rates_cache_v1'
 const COOKIE_TTL_MS = 2 * 24 * 60 * 60 * 1000
 const CURRENCY_API_URL =
-  'https://api.currencyapi.com/v3/latest?apikey=cur_live_PJHFzvzysrami5rnf9VB8aIqKnhYcb3Fp3JP7Lvk&currencies=USD%2CHKD'
-const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN ?? 'd6pcdu9r01qo88aim4i0d6pcdu9r01qo88aim4ig'
+  'https://api.currencyapi.com/v3/latest?apikey=' + import.meta.env.VITE_CURRENCYAPI_KEY?.trim() + '&currencies=USD%2CHKD'
+const FINNHUB_TOKEN = import.meta.env.VITE_FINNHUB_TOKEN?.trim()
 const FINNHUB_QUOTE_URL = 'https://finnhub.io/api/v1/quote'
 const FINNHUB_MARKET_STATUS_URL = 'https://finnhub.io/api/v1/stock/market-status'
 const LIVE_QUOTES_NORMAL_INTERVAL_MS = 5 * 60 * 1000
@@ -112,7 +119,7 @@ const MARKET_OPEN_NOTICE_DAY_KEY = 'stock_market_open_notice_day_v1'
 const NOTIFICATION_SW_PATH = '/notification-sw.js'
 
 type AddTableName = 'Stocks' | 'Dividend' | 'Money Move'
-type PageName = 'table' | 'dataShow' | 'add' | 'live'
+type PageName = 'table' | 'dataShow' | 'goal' | 'add' | 'live'
 type ThemeMode = 'system' | 'light' | 'dark'
 type PriceAlertCondition = 'above' | 'below'
 
@@ -133,6 +140,51 @@ type AddFieldConfig = {
   options?: string[]
   step?: string
   defaultValue?: string
+}
+
+type GoalMetric = 'total-money' | 'earn-money' | 'earn-percent' | 'avg-earn-percent' | 'trade-count'
+type GoalFrequency = 'day' | 'month' | 'year' | 'custom'
+
+type GoalFieldConfig = {
+  key: string
+  label: string
+  inputType: 'text' | 'number' | 'select' | 'date'
+  required?: boolean
+  options?: string[]
+  step?: string
+  defaultValue?: string
+}
+
+type GoalRecord = {
+  id: string
+  metric: GoalMetric
+  targetValue: number
+  targetCurrency: CurrencyCode
+  scheduleType: GoalScheduleType
+  frequency: GoalFrequency | null
+  deadline: string | null
+  createdAt: string
+}
+
+type GoalMetricOption = {
+  value: GoalMetric
+  label: string
+  unit: 'currency' | 'percent' | 'count'
+}
+
+type GoalMetricSnapshot = {
+  totalMoney: number
+  earnMoney: number
+  earnPercent: number
+  avgEarnPercent: number
+  tradeCount: number
+}
+
+type GoalPeriodMetrics = {
+  earnMoney: number
+  earnPercent: number
+  avgEarnPercent: number
+  tradeCount: number
 }
 
 const ADD_TABLE_OPTIONS: AddTableName[] = ['Stocks', 'Dividend', 'Money Move']
@@ -208,6 +260,58 @@ const ADD_FORM_CONFIG: Record<AddTableName, AddFieldConfig[]> = {
     },
   ],
 }
+
+const GOAL_METRIC_OPTIONS: GoalMetricOption[] = [
+  { value: 'total-money', label: 'Total money', unit: 'currency' },
+  { value: 'earn-money', label: 'Earn money', unit: 'currency' },
+  { value: 'earn-percent', label: 'Earn %', unit: 'percent' },
+  { value: 'avg-earn-percent', label: 'Avg earn %', unit: 'percent' },
+  { value: 'trade-count', label: 'No. of trade', unit: 'count' },
+]
+
+const GOAL_FREQUENCY_OPTIONS: Array<{ value: GoalFrequency; label: string }> = [
+  { value: 'day', label: 'Day' },
+  { value: 'month', label: 'Month' },
+  { value: 'year', label: 'Year' },
+  { value: 'custom', label: 'Custom period' },
+]
+
+const GOAL_FORM_CONFIG: GoalFieldConfig[] = [
+  {
+    key: 'metric',
+    label: 'Goal type',
+    inputType: 'select',
+    required: true,
+    options: GOAL_METRIC_OPTIONS.map((option) => option.value),
+    defaultValue: 'total-money',
+  },
+  { key: 'targetValue', label: 'Target value', inputType: 'number', step: '0.01', required: true },
+  {
+    key: 'targetCurrency',
+    label: 'Target currency',
+    inputType: 'select',
+    required: true,
+    options: [...CURRENCY_OPTIONS],
+    defaultValue: 'USD',
+  },
+  {
+    key: 'scheduleType',
+    label: 'Schedule type',
+    inputType: 'select',
+    required: true,
+    options: ['frequency', 'deadline'],
+    defaultValue: 'frequency',
+  },
+  {
+    key: 'frequency',
+    label: 'Frequency',
+    inputType: 'select',
+    required: true,
+    options: GOAL_FREQUENCY_OPTIONS.map((option) => option.value),
+    defaultValue: 'month',
+  },
+  { key: 'deadline', label: 'Deadline', inputType: 'date' },
+]
 
 function getDefaultFormValues(table: AddTableName): Record<string, string> {
   return ADD_FORM_CONFIG[table].reduce<Record<string, string>>((acc, field) => {
@@ -372,6 +476,245 @@ function formatCompactAxisDate(label: string): string {
   return `${day}/${month}/${year.slice(-2)}`
 }
 
+function buildMonthlyTotalMoneySeries(
+  moneyMoveData: SheetDataWithIds,
+  stocksData: SheetDataWithIds,
+  dividendData: SheetDataWithIds,
+  selectedCurrency: CurrencyCode,
+  currencyRates: Record<CurrencyCode, number>,
+): Map<string, number> {
+  type TimelineEvent = {
+    date: Date
+    sourceOrder: number
+    cashDelta: number
+    stockAction?: { symbol: string; action: 'buy' | 'sell'; quantity: number; costPerShare: number }
+  }
+
+  const events: TimelineEvent[] = []
+
+  const moneyMoveAmountIndex = findColumnIndex(moneyMoveData.headers, [
+    'amount',
+    'total',
+    'value',
+    'money',
+    'price',
+  ])
+  const moneyMoveActionIndex = findColumnIndex(moneyMoveData.headers, [
+    'action',
+    'type',
+    'note',
+    'description',
+    'do',
+  ])
+  const moneyMoveDateIndex = findColumnIndex(moneyMoveData.headers, ['date', 'time'])
+  const moneyMoveCurrencyIndex = findColumnIndex(moneyMoveData.headers, ['currency'])
+
+  moneyMoveData.rows.forEach((row, rowIndex) => {
+    if (moneyMoveAmountIndex === -1 || moneyMoveActionIndex === -1 || moneyMoveDateIndex === -1) {
+      return
+    }
+
+    const amount = parseNumber(row[moneyMoveAmountIndex] ?? '')
+    const action = resolveMoneyMoveType(row[moneyMoveActionIndex] ?? '')
+    const date = parseDateValue(row[moneyMoveDateIndex] ?? '')
+
+    if (!Number.isFinite(amount) || !action || !date) {
+      return
+    }
+
+    const rowCurrency = resolveCurrencyCode(row[moneyMoveCurrencyIndex] ?? '')
+    const normalizedAmount = convertAmount(
+      Math.abs(amount),
+      rowCurrency,
+      selectedCurrency,
+      currencyRates,
+    )
+
+    const delta = action === 'in' || action === 'bor' ? normalizedAmount : -normalizedAmount
+
+    events.push({
+      date,
+      sourceOrder: rowIndex,
+      cashDelta: delta,
+    })
+  })
+
+  const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+  const stocksActionIndex = findColumnIndex(stocksData.headers, [
+    'action',
+    'type',
+    'side',
+    'buysell',
+    'operation',
+  ])
+  const stocksSymbolIndex = findColumnIndex(stocksData.headers, [
+    'symbol',
+    'ticker',
+    'stock',
+    'code',
+    'company',
+  ])
+  const stocksQuantityIndex = findColumnIndex(stocksData.headers, [
+    'qty',
+    'quantity',
+    'share',
+    'units',
+    'vol',
+    'volume',
+  ])
+  const stocksTotalIndex = findColumnIndex(stocksData.headers, [
+    'total',
+    'amount',
+    'value',
+    'proceeds',
+    'market value',
+    'marketvalue',
+  ])
+  const stocksPriceIndex = findColumnIndex(stocksData.headers, [
+    'price',
+    'avgprice',
+    'unitprice',
+    'cost',
+    'rate',
+  ])
+  const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+  const stocksFeeIndex = findColumnIndex(stocksData.headers, [
+    'handlingfee',
+    'handling',
+    'fee',
+    'commission',
+    'charge',
+    'charges',
+  ])
+
+  stocksData.rows.forEach((row, rowIndex) => {
+    if (stocksDateIndex === -1 || stocksQuantityIndex === -1) {
+      return
+    }
+
+    const date = parseDateValue(row[stocksDateIndex] ?? '')
+    const quantitySigned = parseNumber(row[stocksQuantityIndex] ?? '')
+    const actionRaw = stocksActionIndex >= 0 ? row[stocksActionIndex] ?? '' : ''
+    const action = resolveAction(actionRaw, quantitySigned) ?? (quantitySigned > 0 ? 'buy' : 'sell')
+
+    let total = stocksTotalIndex >= 0 ? parseNumber(row[stocksTotalIndex] ?? '') : Number.NaN
+    if (!Number.isFinite(total) && stocksPriceIndex >= 0) {
+      const price = parseNumber(row[stocksPriceIndex] ?? '')
+      if (Number.isFinite(price)) {
+        total = Math.abs(price * Math.abs(quantitySigned))
+      }
+    }
+
+    if (!date || !Number.isFinite(total)) {
+      return
+    }
+
+    const rowCurrency = resolveCurrencyCode(row[stocksCurrencyIndex] ?? '')
+    const tradeAmount = convertAmount(
+      Math.abs(total),
+      rowCurrency,
+      selectedCurrency,
+      currencyRates,
+    )
+
+    const feeRaw = stocksFeeIndex >= 0 ? parseNumber(row[stocksFeeIndex] ?? '') : 0
+    const fee = Number.isFinite(feeRaw)
+      ? convertAmount(Math.abs(feeRaw), rowCurrency, selectedCurrency, currencyRates)
+      : 0
+
+    const quantity = Math.abs(quantitySigned)
+    const costPerShare = quantity > 0 ? tradeAmount / quantity : 0
+    const symbol = stocksSymbolIndex >= 0 ? (row[stocksSymbolIndex] ?? '').trim().toUpperCase() : 'UNKNOWN'
+    const cashDelta = action === 'buy' ? -(tradeAmount + fee) : tradeAmount - fee
+
+    events.push({
+      date,
+      sourceOrder: 10_000 + rowIndex,
+      cashDelta,
+      stockAction:
+        quantity > 0
+          ? { symbol, action, quantity, costPerShare }
+          : undefined,
+    })
+  })
+
+  const dividendAmountIndex = findColumnIndex(dividendData.headers, ['dividend', 'div', 'amount', 'value'])
+  const dividendDateIndex = findColumnIndex(dividendData.headers, ['date', 'time'])
+  const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+  dividendData.rows.forEach((row, rowIndex) => {
+    if (dividendAmountIndex === -1 || dividendDateIndex === -1) {
+      return
+    }
+
+    const amount = parseNumber(row[dividendAmountIndex] ?? '')
+    const date = parseDateValue(row[dividendDateIndex] ?? '')
+
+    if (!Number.isFinite(amount) || !date) {
+      return
+    }
+
+    const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+    const normalizedAmount = convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+
+    events.push({
+      date,
+      sourceOrder: 20_000 + rowIndex,
+      cashDelta: normalizedAmount,
+    })
+  })
+
+  events.sort((a, b) => {
+    const timeDiff = a.date.getTime() - b.date.getTime()
+    if (timeDiff !== 0) {
+      return timeDiff
+    }
+    return a.sourceOrder - b.sourceOrder
+  })
+
+  let runningCash = 0
+  const holdingsBySymbol = new Map<string, { quantity: number; costBasis: number }>()
+  const monthLatestTotalMoney = new Map<string, number>()
+
+  events.forEach((event) => {
+    runningCash += event.cashDelta
+
+    if (event.stockAction) {
+      const { symbol, action, quantity, costPerShare } = event.stockAction
+      const costForThisPurchase = quantity * costPerShare
+      const holding = holdingsBySymbol.get(symbol) ?? { quantity: 0, costBasis: 0 }
+
+      if (action === 'buy') {
+        holding.quantity += quantity
+        holding.costBasis += costForThisPurchase
+      } else if (action === 'sell') {
+        const quantityToSell = Math.min(quantity, holding.quantity)
+        const avgCostPerShare = holding.quantity > 0 ? holding.costBasis / holding.quantity : 0
+        const soldCostBasis = quantityToSell * avgCostPerShare
+        holding.quantity -= quantityToSell
+        holding.costBasis = Math.max(0, holding.costBasis - soldCostBasis)
+
+        if (holding.quantity < 0.0001) {
+          holding.quantity = 0
+          holding.costBasis = 0
+        }
+      }
+
+      holdingsBySymbol.set(symbol, holding)
+    }
+
+    const totalHoldingsCostBasis = Array.from(holdingsBySymbol.values()).reduce(
+      (sum, holding) => sum + holding.costBasis,
+      0,
+    )
+    const totalMoney = runningCash + totalHoldingsCostBasis
+    const monthKey = toMonthKey(event.date)
+    monthLatestTotalMoney.set(monthKey, Number(totalMoney.toFixed(2)))
+  })
+
+  return monthLatestTotalMoney
+}
+
 function resolveOAuthRedirectUrl(): string {
   if (typeof window === 'undefined') {
     return AUTH_REDIRECT_URL ?? ''
@@ -430,6 +773,249 @@ function resolveLiveQuotePrice(quote: FinnhubQuoteResponse | undefined): number 
   }
 
   return Number.NaN
+}
+
+function isGoalMetric(value: string): value is GoalMetric {
+  return (
+    value === 'total-money' ||
+    value === 'earn-money' ||
+    value === 'earn-percent' ||
+    value === 'avg-earn-percent' ||
+    value === 'trade-count'
+  )
+}
+
+function isGoalScheduleType(value: string): value is GoalScheduleType {
+  return value === 'frequency' || value === 'deadline'
+}
+
+function mapGoalRowToRecord(row: GoalRow): GoalRecord | null {
+  if (!isGoalMetric(row.metric) || !isGoalScheduleType(row.schedule_type)) {
+    return null
+  }
+
+  const targetValue = Number(row.target_value)
+  if (!Number.isFinite(targetValue)) {
+    return null
+  }
+
+  const targetCurrency = resolveCurrencyCode(row.target_currency)
+  const frequency =
+    row.frequency === 'day' || row.frequency === 'month' || row.frequency === 'year' || row.frequency === 'custom'
+      ? row.frequency
+      : null
+
+  return {
+    id: row.id,
+    metric: row.metric,
+    targetValue,
+    targetCurrency,
+    scheduleType: row.schedule_type,
+    frequency,
+    deadline: typeof row.deadline === 'string' ? row.deadline : null,
+    createdAt: row.created_at,
+  }
+}
+
+function getGoalMetricOption(metric: GoalMetric): GoalMetricOption {
+  return GOAL_METRIC_OPTIONS.find((option) => option.value === metric) ?? GOAL_METRIC_OPTIONS[0]
+}
+
+function getGoalMetricUnit(metric: GoalMetric): GoalMetricOption['unit'] {
+  return getGoalMetricOption(metric).unit
+}
+
+function getGoalMetricLabel(metric: GoalMetric): string {
+  return getGoalMetricOption(metric).label
+}
+
+function formatGoalValue(value: number, metric: GoalMetric, currency: CurrencyCode): string {
+  const unit = getGoalMetricUnit(metric)
+
+  if (unit === 'currency') {
+    return formatCurrency(value, currency)
+  }
+
+  if (unit === 'percent') {
+    return formatPercent(value)
+  }
+
+  return Number.isFinite(value) ? `${Math.max(0, value).toFixed(0)} trades` : '-'
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.min(100, Math.max(0, value))
+}
+
+function parseGoalDeadlineLabel(deadline: string): string {
+  if (!deadline.trim()) {
+    return 'No deadline'
+  }
+
+  const parsed = new Date(deadline)
+  return Number.isNaN(parsed.getTime()) ? deadline : formatDateDDMMYYYY(parsed)
+}
+
+function getGoalScheduleLabel(goal: GoalRecord): string {
+  if (goal.scheduleType === 'deadline') {
+    return goal.deadline ? parseGoalDeadlineLabel(goal.deadline) : 'No deadline'
+  }
+
+  if (!goal.frequency) {
+    return 'Custom period'
+  }
+
+  return GOAL_FREQUENCY_OPTIONS.find((option) => option.value === goal.frequency)?.label ?? goal.frequency
+}
+
+function getGoalDisplayTitle(goal: GoalRecord): string {
+  return `${getGoalMetricLabel(goal.metric)}`
+}
+
+function getPeriodStartEnd(frequency: GoalFrequency): { start: Date; end: Date } | null {
+  if (frequency === 'custom') {
+    return null
+  }
+
+  const now = new Date()
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+
+  if (frequency === 'day') {
+    const end = new Date(start)
+    end.setDate(end.getDate() + 1)
+    return { start, end }
+  }
+
+  if (frequency === 'month') {
+    start.setDate(1)
+    const end = new Date(start)
+    end.setMonth(end.getMonth() + 1)
+    return { start, end }
+  }
+
+  if (frequency === 'year') {
+    start.setMonth(0, 1)
+    const end = new Date(start)
+    end.setFullYear(end.getFullYear() + 1)
+    return { start, end }
+  }
+
+  return null
+}
+
+function isWithinGoalPeriod(date: Date, frequency: GoalFrequency): boolean {
+  const range = getPeriodStartEnd(frequency)
+
+  if (!range) {
+    return true
+  }
+
+  const timestamp = date.getTime()
+  return timestamp >= range.start.getTime() && timestamp < range.end.getTime()
+}
+
+function getGoalDefaultFormValues(defaultCurrency: CurrencyCode = 'USD'): Record<string, string> {
+  return GOAL_FORM_CONFIG.reduce<Record<string, string>>((acc, field) => {
+    if (field.key === 'targetCurrency') {
+      acc[field.key] = defaultCurrency
+    } else {
+      acc[field.key] = field.defaultValue ?? ''
+    }
+    return acc
+  }, {})
+}
+
+function getGoalValueInTargetCurrency(
+  goal: GoalRecord,
+  currentValue: number,
+  selectedCurrency: CurrencyCode,
+  currencyRates: Record<CurrencyCode, number>,
+): number {
+  if (getGoalMetricUnit(goal.metric) !== 'currency') {
+    return currentValue
+  }
+
+  return convertAmount(currentValue, selectedCurrency, goal.targetCurrency, currencyRates)
+}
+
+function getGoalMetricValue(goal: GoalRecord, snapshot: GoalMetricSnapshot, periodSnapshot: GoalPeriodMetrics): number {
+  if (goal.metric === 'total-money') {
+    return snapshot.totalMoney
+  }
+
+  if (goal.metric === 'earn-money') {
+    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.earnMoney : periodSnapshot.earnMoney
+  }
+
+  if (goal.metric === 'earn-percent') {
+    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.earnPercent : periodSnapshot.earnPercent
+  }
+
+  if (goal.metric === 'avg-earn-percent') {
+    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.avgEarnPercent : periodSnapshot.avgEarnPercent
+  }
+
+  return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.tradeCount : periodSnapshot.tradeCount
+}
+
+function getGoalCompletion(
+  goal: GoalRecord,
+  snapshot: GoalMetricSnapshot,
+  periodSnapshot: GoalPeriodMetrics,
+  selectedCurrency: CurrencyCode,
+  currencyRates: Record<CurrencyCode, number>,
+): number {
+  const currentValue = getGoalValueInTargetCurrency(
+    goal,
+    getGoalMetricValue(goal, snapshot, periodSnapshot),
+    selectedCurrency,
+    currencyRates,
+  )
+
+  if (!Number.isFinite(goal.targetValue) || goal.targetValue <= 0) {
+    return 0
+  }
+
+  return clampPercent((currentValue / goal.targetValue) * 100)
+}
+
+function getGoalValueSummary(goal: GoalRecord, currentValue: number, targetValue: number, currency: CurrencyCode): string {
+  const unit = getGoalMetricUnit(goal.metric)
+
+  if (unit === 'currency') {
+    return `${formatGoalValue(currentValue, goal.metric, currency)} / ${formatGoalValue(targetValue, goal.metric, currency)}`
+    // return `${formatGoalValue(targetValue, goal.metric, currency)}`
+  }
+
+  if (unit === 'percent') {
+    return `${formatGoalValue(currentValue, goal.metric, currency)} / ${formatGoalValue(targetValue, goal.metric, currency)}`
+    // return `${formatGoalValue(targetValue, goal.metric, currency)}`
+  }
+
+  return `${Math.max(0, currentValue).toFixed(0)} / ${Math.max(0, targetValue).toFixed(0)} trades`
+  // return `${Math.max(0, targetValue).toFixed(0)} trades`
+}
+
+function getGoalValue(goal: GoalRecord, currentValue: number, targetValue: number, currency: CurrencyCode): string {
+  const unit = getGoalMetricUnit(goal.metric)
+
+  if (unit === 'currency') {
+    // return `${formatGoalValue(currentValue, goal.metric, currency)} / ${formatGoalValue(targetValue, goal.metric, currency)}`
+    return `${formatGoalValue(targetValue, goal.metric, currency)}`
+  }
+
+  if (unit === 'percent') {
+    // return `${formatGoalValue(currentValue, goal.metric, currency)} / ${formatGoalValue(targetValue, goal.metric, currency)}`
+    return `${formatGoalValue(targetValue, goal.metric, currency)}`
+  }
+
+  // return `${Math.max(0, currentValue).toFixed(0)} / ${Math.max(0, targetValue).toFixed(0)} trades`
+  return `${Math.max(0, targetValue).toFixed(0)} trades`
 }
 
 function getCurrentMarketDayKey(): string {
@@ -565,6 +1151,15 @@ function App() {
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editFormMessage, setEditFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
+  const [goalRecords, setGoalRecords] = useState<GoalRecord[]>([])
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null)
+  const [goalFormValues, setGoalFormValues] = useState<Record<string, string>>(getGoalDefaultFormValues())
+  const [isConfirmingGoal, setIsConfirmingGoal] = useState(false)
+  const [isSubmittingGoal, setIsSubmittingGoal] = useState(false)
+  const [goalMessage, setGoalMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState(false)
+  const [viewingGoalIdMain, setViewingGoalIdMain] = useState<string | null>(null)
+  const [showGoalTimelineAsPercent, setShowGoalTimelineAsPercent] = useState(true)
   const userSymbolsReadyForIdRef = useRef<string | null>(null)
   const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -651,6 +1246,52 @@ function App() {
     setIsConfirmingAdd(false)
     setAddFormMessage(null)
   }, [selectedAddTable])
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setGoalRecords([])
+      setSelectedGoalId(null)
+      setGoalMessage(null)
+      setGoalFormValues(getGoalDefaultFormValues(selectedCurrency))
+      setIsConfirmingGoal(false)
+      return
+    }
+
+    let isActive = true
+
+    void (async () => {
+      try {
+        const storedGoals = (await loadUserGoals(currentUserId))
+          .map(mapGoalRowToRecord)
+          .filter((goal): goal is GoalRecord => goal !== null)
+
+        if (!isActive) {
+          return
+        }
+
+        setGoalRecords(storedGoals)
+        setSelectedGoalId((currentSelectedId) =>
+          storedGoals.some((goal) => goal.id === currentSelectedId) ? currentSelectedId : storedGoals[0]?.id ?? null,
+        )
+        setGoalMessage(null)
+        setGoalFormValues(getGoalDefaultFormValues(selectedCurrency))
+        setIsConfirmingGoal(false)
+      } catch (error) {
+        if (!isActive) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        setGoalRecords([])
+        setSelectedGoalId(null)
+        setGoalMessage({ type: 'error', text: `Unable to load goals. ${message}` })
+      }
+    })()
+
+    return () => {
+      isActive = false
+    }
+  }, [currentUserId])
 
   useEffect(() => {
     const storedTheme = safeReadStorage<ThemeMode | null>(THEME_STORAGE_KEY, null)
@@ -900,6 +1541,161 @@ function App() {
       safeWriteStorage(PRICE_ALERTS_STORAGE_KEY, next)
       return next
     })
+  }
+
+  const handleGoalFieldChange = (fieldKey: string, value: string) => {
+    setIsConfirmingGoal(false)
+    setGoalMessage(null)
+    setGoalFormValues((prev) => {
+      const next = { ...prev, [fieldKey]: value }
+
+      if (fieldKey === 'metric') {
+        const nextMetric = value as GoalMetric
+        if (getGoalMetricUnit(nextMetric) === 'currency' && !next.targetCurrency) {
+          next.targetCurrency = selectedCurrency
+        }
+      }
+
+      if (fieldKey === 'scheduleType') {
+        if (value === 'frequency') {
+          next.deadline = ''
+          if (!next.frequency) {
+            next.frequency = 'month'
+          }
+        } else {
+          next.frequency = ''
+          next.deadline = next.deadline || ''
+        }
+      }
+
+      return next
+    })
+  }
+
+  const handleSelectGoal = (goalId: string) => {
+    setSelectedGoalId(goalId)
+  }
+
+  const handleDeleteGoal = async (goalId: string) => {
+    if (!currentUserId) {
+      setGoalMessage({ type: 'error', text: 'Please sign in with Google before deleting goals.' })
+      return
+    }
+
+    try {
+      await deleteUserGoal(goalId)
+      setGoalRecords((prev) => {
+        const next = prev.filter((goal) => goal.id !== goalId)
+        if (selectedGoalId === goalId) {
+          setSelectedGoalId(next[0]?.id ?? null)
+        }
+        return next
+      })
+      setGoalMessage({ type: 'success', text: 'Goal removed.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setGoalMessage({ type: 'error', text: `Failed to delete goal. ${message}` })
+    }
+  }
+
+  const handleSubmitGoal = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setGoalMessage(null)
+
+    if (!isConfirmingGoal) {
+      setIsConfirmingGoal(true)
+      return
+    }
+
+    if (!currentUserId) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Please sign in with Google before saving goals.' })
+      return
+    }
+
+    const targetValue = Number(goalFormValues.targetValue)
+    const metric = goalFormValues.metric as GoalMetric
+    const targetCurrency = resolveCurrencyCode(goalFormValues.targetCurrency)
+    const scheduleType = goalFormValues.scheduleType as GoalScheduleType
+    const frequency = goalFormValues.frequency as GoalFrequency
+    const deadline = goalFormValues.deadline.trim()
+
+    if (!Number.isFinite(targetValue) || targetValue <= 0) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Target value must be greater than 0.' })
+      return
+    }
+
+    if (getGoalMetricUnit(metric) === 'currency' && !goalFormValues.targetCurrency.trim()) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Target currency is required for price-based goals.' })
+      return
+    }
+
+    if (scheduleType === 'frequency' && !frequency) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Choose a frequency or switch to deadline.' })
+      return
+    }
+
+    if (scheduleType === 'deadline' && !deadline) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Deadline is required when deadline mode is selected.' })
+      return
+    }
+
+    setIsSubmittingGoal(true)
+
+    try {
+      const goalId = crypto.randomUUID()
+      const newGoal: GoalRecord = {
+        id: goalId,
+        metric,
+        targetValue,
+        targetCurrency,
+        scheduleType,
+        frequency: scheduleType === 'frequency' ? frequency : null,
+        deadline: scheduleType === 'deadline' ? deadline : null,
+        createdAt: new Date().toISOString(),
+      }
+
+      await insertUserGoal(currentUserId, {
+        id: goalId,
+        metric,
+        targetValue,
+        targetCurrency,
+        scheduleType,
+        frequency: newGoal.frequency,
+        deadline: newGoal.deadline,
+      })
+
+      setGoalRecords((prev) => {
+        const next = [newGoal, ...prev]
+        return next
+      })
+      setSelectedGoalId(newGoal.id)
+      setGoalFormValues(getGoalDefaultFormValues(selectedCurrency))
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'success', text: 'Goal saved.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setGoalMessage({ type: 'error', text: `Unable to save goal. ${message}` })
+    } finally {
+      setIsSubmittingGoal(false)
+      setIsConfirmingGoal(false)
+    }
+  }
+
+  const handleOpenGoalModalMain = () => {
+    setGoalFormValues(getGoalDefaultFormValues(selectedCurrency))
+    setIsConfirmingGoal(false)
+    setGoalMessage(null)
+    setIsGoalModalOpen(true)
+  }
+
+  const handleCloseGoalModalMain = () => {
+    setIsGoalModalOpen(false)
+    setViewingGoalIdMain(null)
   }
 
   const handleOpenEditModal = (table: AddTableName, rowIndex: number) => {
@@ -1293,6 +2089,90 @@ function App() {
         inputProps={field.inputType === 'number' && field.step ? { step: field.step } : undefined}
       />
     )
+  }
+
+  const renderGoalField = (field: GoalFieldConfig, className?: string) => {
+    if (field.inputType === 'select') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          select
+          variant="standard"
+          label={field.label}
+          required={Boolean(field.required)}
+          value={goalFormValues[field.key] ?? ''}
+          onChange={(event) => handleGoalFieldChange(field.key, event.target.value)}
+        >
+          {(field.options ?? []).map((option) => {
+            let label = option
+
+            if (field.key === 'metric') {
+              label = getGoalMetricLabel(option as GoalMetric)
+            } else if (field.key === 'scheduleType') {
+              label = option === 'frequency' ? 'Frequency' : 'Deadline'
+            } else if (field.key === 'frequency') {
+              label = GOAL_FREQUENCY_OPTIONS.find((item) => item.value === option)?.label ?? option
+            }
+
+            return (
+              <MenuItem key={`${field.key}-${option}`} value={option}>
+                {label}
+              </MenuItem>
+            )
+          })}
+        </TextField>
+      )
+    }
+
+    if (field.inputType === 'date') {
+      return (
+        <TextField
+          key={field.key}
+          className={className}
+          label={field.label}
+          type="date"
+          variant="standard"
+          required={Boolean(field.required)}
+          value={goalFormValues[field.key] ?? ''}
+          onChange={(event) => handleGoalFieldChange(field.key, event.target.value)}
+          InputLabelProps={{ shrink: true }}
+        />
+      )
+    }
+
+    return (
+      <TextField
+        key={field.key}
+        className={className}
+        label={field.label}
+        type={field.inputType === 'number' ? 'number' : 'text'}
+        variant="standard"
+        required={Boolean(field.required)}
+        value={goalFormValues[field.key] ?? ''}
+        onChange={(event) => handleGoalFieldChange(field.key, event.target.value)}
+        inputProps={field.inputType === 'number' && field.step ? { step: field.step } : undefined}
+      />
+    )
+  }
+
+  const shouldShowGoalField = (field: GoalFieldConfig): boolean => {
+    const selectedMetric = goalFormValues.metric as GoalMetric
+    const selectedScheduleType = goalFormValues.scheduleType as GoalScheduleType
+
+    if (field.key === 'targetCurrency') {
+      return getGoalMetricUnit(selectedMetric) === 'currency'
+    }
+
+    if (field.key === 'frequency') {
+      return selectedScheduleType === 'frequency'
+    }
+
+    if (field.key === 'deadline') {
+      return selectedScheduleType === 'deadline'
+    }
+
+    return true
   }
 
   const handleSubmitAdd = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1956,6 +2836,14 @@ function App() {
     })
 
     const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const stocksFeeIndex = findColumnIndex(stocksData.headers, [
+      'handlingfee',
+      'handling',
+      'fee',
+      'commission',
+      'charge',
+      'charges',
+    ])
     const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
     const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
 
@@ -1963,6 +2851,7 @@ function App() {
     let earnTradeCount = 0
     let percentSum = 0
     let percentCount = 0
+    let handlingFeeTotal = 0
 
     displayStocksData.rows.forEach((row, rowIndex) => {
       if (profitLossIndex !== -1) {
@@ -1973,6 +2862,21 @@ function App() {
           )
           earnAll += convertAmount(profitLoss, rowCurrency, selectedCurrency, currencyRates)
           earnTradeCount += 1
+        }
+      }
+
+      if (stocksFeeIndex !== -1) {
+        const feeValue = parseNumber(stocksData.rows[rowIndex]?.[stocksFeeIndex] ?? '')
+        if (Number.isFinite(feeValue)) {
+          const rowCurrency = resolveCurrencyCode(
+            stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '',
+          )
+          handlingFeeTotal += convertAmount(
+            Math.abs(feeValue),
+            rowCurrency,
+            selectedCurrency,
+            currencyRates,
+          )
         }
       }
 
@@ -1988,17 +2892,509 @@ function App() {
 
     const earnPerTrade = earnTradeCount > 0 ? earnAll / earnTradeCount : 0
     const percentAverage = percentCount > 0 ? percentSum / percentCount : 0
-    const totalMoney = moneyMoveNet + earnAll + dividendTotal
+    const totalMoney = moneyMoveNet + earnAll + dividendTotal - handlingFeeTotal
 
     return {
       totalMoney,
       borrowed,
       dividendTotal,
       earnAll,
+      handlingFeeTotal,
       earnPerTrade,
       percentAverage,
     }
   }, [moneyMoveData, dividendData, displayStocksData, stocksData, selectedCurrency, currencyRates])
+
+  const goalSnapshot = useMemo(() => {
+    const totalMoney = summary.totalMoney
+    const earnMoney = summary.earnAll
+    const earnPercent = totalMoney > 0 ? (earnMoney / totalMoney) * 100 : 0
+    const avgEarnPercent = summary.percentAverage
+    const tradeCount = stocksData.rows.length
+
+    const buildPeriodMetrics = (frequency: Exclude<GoalFrequency, 'custom'>): GoalPeriodMetrics => {
+      const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+      const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+      const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
+      const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
+      const dividendAmountIndex = findColumnIndex(dividendData.headers, ['dividend', 'div', 'amount', 'total', 'value'])
+      const dividendDateIndex = findColumnIndex(dividendData.headers, ['date', 'time'])
+      const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+      let periodEarnMoney = 0
+      let periodPercentSum = 0
+      let periodPercentCount = 0
+      let periodTradeCount = 0
+
+      if (stocksDateIndex !== -1 && profitLossIndex !== -1) {
+        displayStocksData.rows.forEach((row, rowIndex) => {
+          const date = parseDateValue(stocksData.rows[rowIndex]?.[stocksDateIndex] ?? '')
+          if (!date || !isWithinGoalPeriod(date, frequency)) {
+            return
+          }
+
+          const profitLoss = parseNumber(row[profitLossIndex] ?? '')
+          if (Number.isFinite(profitLoss)) {
+            const rowCurrency = resolveCurrencyCode(stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '')
+            periodEarnMoney += convertAmount(profitLoss, rowCurrency, selectedCurrency, currencyRates)
+            periodTradeCount += 1
+          }
+
+          if (percentIndex !== -1) {
+            const percentage = parseNumber(row[percentIndex] ?? '')
+            if (Number.isFinite(percentage)) {
+              periodPercentSum += percentage
+              periodPercentCount += 1
+            }
+          }
+        })
+      }
+
+      if (dividendAmountIndex !== -1 && dividendDateIndex !== -1) {
+        dividendData.rows.forEach((row) => {
+          const date = parseDateValue(row[dividendDateIndex] ?? '')
+          if (!date || !isWithinGoalPeriod(date, frequency)) {
+            return
+          }
+
+          const amount = parseNumber(row[dividendAmountIndex] ?? '')
+          if (!Number.isFinite(amount)) {
+            return
+          }
+
+          const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+          periodEarnMoney += convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+        })
+      }
+
+      return {
+        earnMoney: periodEarnMoney,
+        earnPercent: totalMoney > 0 ? (periodEarnMoney / totalMoney) * 100 : 0,
+        avgEarnPercent: periodPercentCount > 0 ? periodPercentSum / periodPercentCount : 0,
+        tradeCount: periodTradeCount,
+      }
+    }
+
+    return {
+      snapshot: {
+        totalMoney,
+        earnMoney,
+        earnPercent,
+        avgEarnPercent,
+        tradeCount,
+      },
+      periodMetrics: {
+        day: buildPeriodMetrics('day'),
+        month: buildPeriodMetrics('month'),
+        year: buildPeriodMetrics('year'),
+        custom: {
+          earnMoney,
+          earnPercent,
+          avgEarnPercent,
+          tradeCount,
+        },
+      },
+    }
+  }, [summary, stocksData, dividendData, displayStocksData, selectedCurrency, currencyRates])
+
+  const selectedGoal = useMemo(() => {
+    if (goalRecords.length === 0) {
+      return null
+    }
+
+    return goalRecords.find((goal) => goal.id === selectedGoalId) ?? goalRecords[0]
+  }, [goalRecords, selectedGoalId])
+
+  const goalProgressRows = useMemo(() => {
+    return goalRecords.map((goal) => {
+      const periodKey = goal.scheduleType === 'deadline' ? 'custom' : goal.frequency ?? 'custom'
+      const periodSnapshot = goalSnapshot.periodMetrics[periodKey]
+      const currentValue = getGoalMetricValue(goal, goalSnapshot.snapshot, periodSnapshot)
+      const displayCurrentValue = getGoalValueInTargetCurrency(goal, currentValue, selectedCurrency, currencyRates)
+      const completion = getGoalCompletion(
+        goal,
+        goalSnapshot.snapshot,
+        periodSnapshot,
+        selectedCurrency,
+        currencyRates,
+      )
+
+      return {
+        ...goal,
+        currentValue,
+        displayCurrentValue,
+        completion,
+      }
+    })
+  }, [goalRecords, goalSnapshot, selectedCurrency, currencyRates])
+
+  const selectedGoalProgress = useMemo(() => {
+    if (!selectedGoal) {
+      return null
+    }
+
+    const periodKey = selectedGoal.scheduleType === 'deadline' ? 'custom' : selectedGoal.frequency ?? 'custom'
+    const periodSnapshot = goalSnapshot.periodMetrics[periodKey]
+    const currentValue = getGoalMetricValue(selectedGoal, goalSnapshot.snapshot, periodSnapshot)
+    const displayCurrentValue = getGoalValueInTargetCurrency(
+      selectedGoal,
+      currentValue,
+      selectedCurrency,
+      currencyRates,
+    )
+    const completion = getGoalCompletion(
+      selectedGoal,
+      goalSnapshot.snapshot,
+      periodSnapshot,
+      selectedCurrency,
+      currencyRates,
+    )
+
+    return {
+      goal: selectedGoal,
+      currentValue,
+      displayCurrentValue,
+      completion,
+      periodSnapshot,
+    }
+  }, [selectedGoal, goalSnapshot, selectedCurrency, currencyRates])
+
+  const selectedMainGoalProgress = useMemo(() => {
+    if (!viewingGoalIdMain) {
+      return null
+    }
+
+    return goalProgressRows.find((goal) => goal.id === viewingGoalIdMain) ?? null
+  }, [viewingGoalIdMain, goalProgressRows])
+
+  const selectedMainGoalMonthlyCompletionHistory = useMemo(() => {
+    if (!selectedMainGoalProgress) {
+      return {
+        labels: [] as string[],
+        periodCompletionValues: [] as number[],
+        timelineCompletionValues: [] as number[],
+        timelineRawValues: [] as number[],
+        metricUnit: '',
+      }
+    }
+
+    const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+    const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
+    const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
+    const dividendAmountIndex = findColumnIndex(dividendData.headers, ['dividend', 'div', 'amount', 'value'])
+    const dividendDateIndex = findColumnIndex(dividendData.headers, ['date', 'time'])
+    const dividendCurrencyIndex = findColumnIndex(dividendData.headers, ['currency'])
+
+    const monthMap = new Map<string, { earnMoney: number; percentSum: number; percentCount: number; tradeCount: number }>()
+    const deadlineWindowMonthKeys = (() => {
+      if (selectedMainGoalProgress.scheduleType !== 'deadline' || !selectedMainGoalProgress.deadline) {
+        return null
+      }
+
+      const deadlineDate = parseDateValue(selectedMainGoalProgress.deadline)
+      if (!deadlineDate) {
+        return null
+      }
+
+      const deadlineMonth = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), 1)
+      const startMonth = new Date(deadlineMonth)
+      startMonth.setMonth(startMonth.getMonth() - 11)
+
+      const allowedMonths = new Set<string>()
+      const cursor = new Date(startMonth)
+
+      while (cursor <= deadlineMonth) {
+        allowedMonths.add(toMonthKey(cursor))
+        cursor.setMonth(cursor.getMonth() + 1)
+      }
+
+      return allowedMonths
+    })()
+
+    const shouldUseDeadlineTotalMoneyTimeline =
+      selectedMainGoalProgress.scheduleType === 'deadline' && selectedMainGoalProgress.metric === 'total-money'
+
+    const deadlineTotalMoneyByMonth = shouldUseDeadlineTotalMoneyTimeline
+      ? buildMonthlyTotalMoneySeries(
+          moneyMoveData,
+          stocksData,
+          dividendData,
+          selectedCurrency,
+          currencyRates,
+        )
+      : null
+
+    const deadlineMonths = deadlineWindowMonthKeys ? Array.from(deadlineWindowMonthKeys).sort((a, b) => a.localeCompare(b)) : []
+
+    if (shouldUseDeadlineTotalMoneyTimeline && deadlineMonths.length > 0) {
+      const allMonthlyKeysSorted = Array.from(deadlineTotalMoneyByMonth?.keys() ?? []).sort((a, b) => a.localeCompare(b))
+      const firstWindowMonth = deadlineMonths[0]
+
+      let lastKnownTotalMoney = 0
+      allMonthlyKeysSorted.forEach((monthKey) => {
+        if (monthKey < firstWindowMonth) {
+          const totalMoney = deadlineTotalMoneyByMonth?.get(monthKey)
+          if (typeof totalMoney === 'number') {
+            lastKnownTotalMoney = totalMoney
+          }
+        }
+      })
+
+      const deadlineTimelineValues = deadlineMonths.map((monthKey) => {
+        const monthTotalMoney = deadlineTotalMoneyByMonth?.get(monthKey)
+        if (typeof monthTotalMoney === 'number') {
+          lastKnownTotalMoney = monthTotalMoney
+        }
+
+        const normalizedTotalMoney = getGoalValueInTargetCurrency(
+          selectedMainGoalProgress,
+          lastKnownTotalMoney,
+          selectedCurrency,
+          currencyRates,
+        )
+
+        return clampPercent((normalizedTotalMoney / selectedMainGoalProgress.targetValue) * 100)
+      })
+
+      if (import.meta.env.DEV) {
+        const latestTimelinePercent = deadlineTimelineValues[deadlineTimelineValues.length - 1] ?? 0
+        const latestMonth = deadlineMonths[deadlineMonths.length - 1] ?? 'n/a'
+        const latestMonthTotalMoney = deadlineTotalMoneyByMonth?.get(latestMonth) ?? lastKnownTotalMoney
+
+        console.log('[GoalTimeline][DeadlineTotalMoney][Debug]', {
+          goalId: selectedMainGoalProgress.id,
+          metric: selectedMainGoalProgress.metric,
+          targetValue: selectedMainGoalProgress.targetValue,
+          targetCurrency: selectedMainGoalProgress.targetCurrency,
+          selectedCurrency,
+          gaugeCompletion: selectedMainGoalProgress.completion,
+          gaugeCurrentValue: selectedMainGoalProgress.displayCurrentValue,
+          summaryTotalMoney: summary.totalMoney,
+          deadlineMonths,
+          latestMonth,
+          latestMonthTotalMoney,
+          latestTimelinePercent,
+          monthEndTotalsInWindow: deadlineMonths.map((monthKey, index) => ({
+            monthKey,
+            totalMoney: deadlineTotalMoneyByMonth?.get(monthKey) ?? null,
+            timelinePercent: Number((deadlineTimelineValues[index] ?? 0).toFixed(2)),
+          })),
+        })
+      }
+
+      // Compute raw values for deadline total-money case
+      let lastKnownTotalMoneyForRaw = 0
+      // Initialize with the last known value before the window starts
+      allMonthlyKeysSorted.forEach((monthKey) => {
+        if (monthKey < firstWindowMonth) {
+          const totalMoney = deadlineTotalMoneyByMonth?.get(monthKey)
+          if (typeof totalMoney === 'number') {
+            lastKnownTotalMoneyForRaw = totalMoney
+          }
+        }
+      })
+
+      const deadlineTimelineRawValues = deadlineMonths.map((monthKey) => {
+        const monthTotalMoney = deadlineTotalMoneyByMonth?.get(monthKey)
+        if (typeof monthTotalMoney === 'number') {
+          lastKnownTotalMoneyForRaw = monthTotalMoney
+        }
+        return Number(lastKnownTotalMoneyForRaw.toFixed(2))
+      })
+
+      return {
+        labels: deadlineMonths.map((month) => formatMonthLabel(month)),
+        periodCompletionValues: deadlineTimelineValues.map((value) => Number(value.toFixed(2))),
+        timelineCompletionValues: deadlineTimelineValues.map((value) => Number(value.toFixed(2))),
+        timelineRawValues: deadlineTimelineRawValues,
+        metricUnit: 'money',
+      }
+    }
+
+    if (stocksDateIndex !== -1) {
+      displayStocksData.rows.forEach((row, rowIndex) => {
+        const dateValue = parseDateValue(stocksData.rows[rowIndex]?.[stocksDateIndex] ?? '')
+        if (!dateValue) {
+          return
+        }
+
+        const monthKey = toMonthKey(dateValue)
+        if (deadlineWindowMonthKeys && !deadlineWindowMonthKeys.has(monthKey)) {
+          return
+        }
+
+        const current = monthMap.get(monthKey) ?? { earnMoney: 0, percentSum: 0, percentCount: 0, tradeCount: 0 }
+
+        if (profitLossIndex !== -1) {
+          const profitLoss = parseNumber(row[profitLossIndex] ?? '')
+          if (Number.isFinite(profitLoss)) {
+            const rowCurrency = resolveCurrencyCode(stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '')
+            current.earnMoney += convertAmount(profitLoss, rowCurrency, selectedCurrency, currencyRates)
+            current.tradeCount += 1
+          }
+        }
+
+        if (percentIndex !== -1) {
+          const percentValue = parseNumber(row[percentIndex] ?? '')
+          if (Number.isFinite(percentValue)) {
+            current.percentSum += percentValue
+            current.percentCount += 1
+          }
+        }
+
+        monthMap.set(monthKey, current)
+      })
+    }
+
+    if (dividendAmountIndex !== -1 && dividendDateIndex !== -1) {
+      dividendData.rows.forEach((row) => {
+        const dateValue = parseDateValue(row[dividendDateIndex] ?? '')
+        if (!dateValue) {
+          return
+        }
+
+        const monthKey = toMonthKey(dateValue)
+        if (deadlineWindowMonthKeys && !deadlineWindowMonthKeys.has(monthKey)) {
+          return
+        }
+
+        const current = monthMap.get(monthKey) ?? { earnMoney: 0, percentSum: 0, percentCount: 0, tradeCount: 0 }
+        const amount = parseNumber(row[dividendAmountIndex] ?? '')
+        if (!Number.isFinite(amount)) {
+          return
+        }
+
+        const rowCurrency = resolveCurrencyCode(row[dividendCurrencyIndex] ?? '')
+        current.earnMoney += convertAmount(amount, rowCurrency, selectedCurrency, currencyRates)
+        monthMap.set(monthKey, current)
+      })
+    }
+
+    const recentMonths = deadlineWindowMonthKeys
+      ? Array.from(deadlineWindowMonthKeys)
+      : Array.from(monthMap.keys()).sort((a, b) => a.localeCompare(b)).slice(-12)
+
+    // Helper function to find the last available month with data on or before a given month
+    const findLastValueAtOrBefore = (targetMonth: string) => {
+      const row = monthMap.get(targetMonth)
+      if (row) {
+        return row
+      }
+
+      // Look backwards to find the last month with data
+      const allMonthsSorted = Array.from(monthMap.keys()).sort((a, b) => a.localeCompare(b))
+      for (let i = allMonthsSorted.length - 1; i >= 0; i--) {
+        if (allMonthsSorted[i] <= targetMonth) {
+          const foundRow = monthMap.get(allMonthsSorted[i])
+          if (foundRow) {
+            return foundRow
+          }
+        }
+      }
+
+      return null
+    }
+
+    const monthMetricValues = recentMonths.map((monthKey) => {
+      const row = findLastValueAtOrBefore(monthKey)
+      if (!row) {
+        return 0
+      }
+
+      let currentValue = 0
+      if (selectedMainGoalProgress.metric === 'earn-money') {
+        currentValue = getGoalValueInTargetCurrency(
+          selectedMainGoalProgress,
+          row.earnMoney,
+          selectedCurrency,
+          currencyRates,
+        )
+      } else if (selectedMainGoalProgress.metric === 'earn-percent') {
+        currentValue = summary.totalMoney > 0 ? (row.earnMoney / summary.totalMoney) * 100 : 0
+      } else if (selectedMainGoalProgress.metric === 'avg-earn-percent') {
+        currentValue = row.percentCount > 0 ? row.percentSum / row.percentCount : 0
+      } else if (selectedMainGoalProgress.metric === 'trade-count') {
+        currentValue = row.tradeCount
+      } else {
+        currentValue = getGoalValueInTargetCurrency(
+          selectedMainGoalProgress,
+          row.earnMoney,
+          selectedCurrency,
+          currencyRates,
+        )
+      }
+
+      return currentValue
+    })
+
+    const hasValidTarget = Number.isFinite(selectedMainGoalProgress.targetValue) && selectedMainGoalProgress.targetValue > 0
+    const periodCompletionValues = hasValidTarget
+      ? monthMetricValues.map((value) => clampPercent((value / selectedMainGoalProgress.targetValue) * 100))
+      : monthMetricValues.map(() => 0)
+
+    let runningTotal = 0
+    const timelineCompletionValues = hasValidTarget
+      ? monthMetricValues.map((value) => {
+          const unit = getGoalMetricUnit(selectedMainGoalProgress.metric)
+
+          if (unit === 'percent') {
+            runningTotal = value
+          } else {
+            runningTotal += value
+          }
+
+          return clampPercent((runningTotal / selectedMainGoalProgress.targetValue) * 100)
+        })
+      : monthMetricValues.map(() => 0)
+
+    if (import.meta.env.DEV && selectedMainGoalProgress.scheduleType === 'deadline') {
+      console.log('[GoalTimeline][DeadlineFallback][Debug]', {
+        goalId: selectedMainGoalProgress.id,
+        metric: selectedMainGoalProgress.metric,
+        targetValue: selectedMainGoalProgress.targetValue,
+        targetCurrency: selectedMainGoalProgress.targetCurrency,
+        selectedCurrency,
+        gaugeCompletion: selectedMainGoalProgress.completion,
+        gaugeCurrentValue: selectedMainGoalProgress.displayCurrentValue,
+        summaryTotalMoney: summary.totalMoney,
+        recentMonths,
+        monthMetricValues,
+        timelineCompletionValues,
+      })
+    }
+
+    // Compute raw timeline values (running total in actual units, not percentages)
+    let runningTotalRaw = 0
+    const timelineRawValues = monthMetricValues.map((value) => {
+      const unit = getGoalMetricUnit(selectedMainGoalProgress.metric)
+
+      if (unit === 'percent') {
+        runningTotalRaw = value
+      } else {
+        runningTotalRaw += value
+      }
+
+      return runningTotalRaw
+    })
+
+    const metricUnit = getGoalMetricUnit(selectedMainGoalProgress.metric)
+
+    return {
+      labels: recentMonths.map((month) => formatMonthLabel(month)),
+      periodCompletionValues: periodCompletionValues.map((value) => Number(value.toFixed(2))),
+      timelineCompletionValues: timelineCompletionValues.map((value) => Number(value.toFixed(2))),
+      timelineRawValues: timelineRawValues.map((value) => Number(value.toFixed(2))),
+      metricUnit,
+    }
+  }, [selectedMainGoalProgress, stocksData, displayStocksData, dividendData, selectedCurrency, currencyRates, summary.totalMoney])
+
+  const goalBarChartData = useMemo(() => {
+    return {
+      labels: goalProgressRows.map((goal) => getGoalDisplayTitle(goal)),
+      values: goalProgressRows.map((goal) => goal.completion),
+    }
+  }, [goalProgressRows])
 
   const moneyTimelineChart = useMemo(() => {
     type TimelineEvent = {
@@ -2680,6 +4076,69 @@ function App() {
     )
   }
 
+  const renderGoalModal = () => {
+    return (
+      <Modal
+        open={isGoalModalOpen}
+        onClose={handleCloseGoalModalMain}
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+        }}
+      >
+        <Paper
+          elevation={8}
+          className="add-form-card"
+          sx={{
+            width: '90%',
+            maxWidth: '600px',
+            height: 'auto',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            backgroundColor: 'var(--bg)',
+            color: 'var(--text)',
+            padding: '2rem',
+          }}
+        >
+          <Box component="form" className="add-form-grid goal-form-grid" onSubmit={handleSubmitGoal}>
+            <h2 style={{ textAlign: 'center', marginBottom: '1.5rem', color: 'var(--text)' }}>Create New Goal</h2>
+
+            {GOAL_FORM_CONFIG.filter((field) => shouldShowGoalField(field)).map((field) =>
+              renderGoalField(field, `goal-field-${field.key}`),
+            )}
+
+            <Box className="add-form-actions">
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={isSubmittingGoal || !currentUserId}
+                className={isConfirmingGoal ? 'is-confirming' : ''}
+              >
+                {isSubmittingGoal
+                  ? 'Saving...'
+                  : isConfirmingGoal
+                    ? 'Confirm'
+                    : currentUserId
+                      ? 'Save Goal'
+                      : 'Sign in required'}
+              </Button>
+              <Button
+                type="button"
+                variant="outlined"
+                onClick={handleCloseGoalModalMain}
+              >
+                Cancel
+              </Button>
+            </Box>
+
+            {goalMessage ? <Alert severity={goalMessage.type}>{goalMessage.text}</Alert> : null}
+          </Box>
+        </Paper>
+      </Modal>
+    )
+  }
+
   const formatLiveQuoteValue = (value: number | undefined, type: 'price' | 'change' | 'percent') => {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
       return '-'
@@ -2721,6 +4180,30 @@ function App() {
           >
             <MdDataUsage size={20} />
           </Button>
+          {/* <Button
+            variant={page === 'goal' ? 'contained' : 'outlined'}
+            sx={{
+              width: 40,
+              minWidth: 40,
+              height: 40,
+              padding: 0,
+              borderRadius: '50%',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--wbg)',
+              borderColor: 'var(--wbg)',
+              '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                },
+              },
+            }}
+            onClick={() => setPage('goal')}
+          >
+            <MdTrendingUp size={20} />
+          </Button> */}
           <Button
             variant={page === 'live' ? 'contained' : 'outlined'}
             sx={{
@@ -2925,6 +4408,7 @@ function App() {
       </header>
 
       {renderEditModal()}
+      {renderGoalModal()}
 
       {isLoading ? (
         <div className="state-block" role="status" aria-live="polite">
@@ -2948,216 +4432,559 @@ function App() {
                 <h1 className="user-title text-black">{currentUserName}</h1>
                 <p className="user-title">{currentUserEmail}</p>
               </Box>
+
+              <Box>
+                <Box className="sheet-title-container" style={{ display: 'flex', alignItems: 'end', justifyContent: 'start', gap: '1rem', position: 'relative' }}>
+                  <h1 className="sheet-title text-black">Goal</h1>
+                  <Button
+                    variant="outlined"
+                    onClick={handleOpenGoalModalMain}
+                    sx={{
+                      width: 40,
+                      minWidth: 40,
+                      height: 40,
+                      padding: 0,
+                      marginBottom: '4px',
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--bg)',
+                      color: 'var(--wbg)',
+                      borderColor: 'var(--wbg)',
+                      '&:hover': {
+                        borderColor: 'var(--accent)',
+                        opacity: 0.92,
+                      },
+                    }}
+                  >
+                    <MdOutlineAdd size={20} />
+                  </Button>
+                </Box>
+
+                {goalProgressRows.length > 0 && (
+                  <Box className="goal-main-scroll-wrap">
+                    <Box className="goal-main-scroll">
+                      {goalProgressRows.map((goal) => (
+                        <Box
+                          key={goal.id}
+                          className={`goal-main-card ${viewingGoalIdMain === goal.id ? ' goal-main-card-selected' : ''}`}
+                          onClick={() =>
+                            setViewingGoalIdMain((currentGoalId) =>
+                              currentGoalId === goal.id ? null : goal.id,
+                            )
+                          }
+                        >
+                          <Box className="goal-main-card-head">
+                            <p className="summary-label">{getGoalDisplayTitle(goal)} | {getGoalValue(goal, goal.displayCurrentValue, goal.targetValue, goal.targetCurrency)}</p>
+                            <Button
+                              variant="text"
+                              className="live-unfollow-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (viewingGoalIdMain === goal.id) {
+                                  setViewingGoalIdMain(null)
+                                }
+                                handleDeleteGoal(goal.id)
+                              }}
+                              aria-label={`Delete goal ${getGoalDisplayTitle(goal)}`}
+                              sx={{ minWidth: 32, width: 32, height: 32, borderRadius: '50%' }}
+                            >
+                              <MdCancel size={18} />
+                            </Button>
+                          </Box>
+                          <p className="summary-value" style={{ color: goal.completion === 100 ? '#16a34a' : '' }}>
+                            {/* {getGoalValueSummary(goal, goal.displayCurrentValue, goal.targetValue, goal.targetCurrency)} */}
+                            {goal.completion.toFixed(0)}%
+                          </p>
+                          {/* <p className="goal-main-progress">{goal.completion.toFixed(1)}% complete</p> */}
+                        </Box>
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+
+                {goalProgressRows.length === 0 && (
+                  <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>No goals yet. Click + to create one.</p>
+                )}
+
+                {selectedMainGoalProgress ? (
+                  <Box className="dashboard-layout goal-main-detail-grid">
+                    <Box className="chart-card goal-main-gauge-card">
+                      <h2 className="chart-title">Selected Goal Progress</h2>
+                      <div className="chart-canvas chart-canvas-center">
+                        <Gauge
+                          width={300}
+                          height={230}
+                          value={selectedMainGoalProgress.completion}
+                          valueMin={0}
+                          valueMax={100}
+                          sx={{ '& .MuiGauge-valueArc': { fill: 'var(--special)' } }}
+                        />
+                      </div>
+                      <p className="goal-gauge-value">{selectedMainGoalProgress.completion.toFixed(2)}%</p>
+                      <p className="goal-gauge-label">{getGoalDisplayTitle(selectedMainGoalProgress)}</p>
+                      <p className="goal-gauge-detail">
+                        {getGoalValueSummary(
+                          selectedMainGoalProgress,
+                          selectedMainGoalProgress.displayCurrentValue,
+                          selectedMainGoalProgress.targetValue,
+                          selectedMainGoalProgress.targetCurrency,
+                        )}
+                      </p>
+                    </Box>
+
+                    {selectedMainGoalProgress.scheduleType === 'frequency' ? (
+                      <Box className="chart-card goal-main-history-card">
+                        <h2 className="chart-title">Goal Completion History (Monthly)</h2>
+                        <div className="chart-canvas">
+                          {selectedMainGoalMonthlyCompletionHistory.labels.length === 0 ? (
+                            <p className="chart-empty">No monthly data available for this goal yet.</p>
+                          ) : (
+                            <BarChart
+                              height={280}
+                              xAxis={[{ scaleType: 'band', data: selectedMainGoalMonthlyCompletionHistory.labels }]}
+                              yAxis={[{ label: 'Completion %', max: 100 }]}
+                              series={[
+                                {
+                                  label: `Completion % (target ${formatGoalValue(selectedMainGoalProgress.targetValue, selectedMainGoalProgress.metric, selectedMainGoalProgress.targetCurrency)})`,
+                                  color: '#ff8447',
+                                  data: selectedMainGoalMonthlyCompletionHistory.periodCompletionValues,
+                                },
+                              ]}
+                            />
+                          )}
+                        </div>
+                      </Box>
+                    ) : (
+                      <Box className="chart-card goal-main-history-card">
+                        <Box className="goal-timeline-header">
+                          <h2 className="chart-title">Goal Timeline</h2>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={() => setShowGoalTimelineAsPercent(!showGoalTimelineAsPercent)}
+                            sx={{
+                              textTransform: 'none',
+                              borderRadius: '8px',
+                              fontSize: '0.875rem',
+                              height: '32px',
+                              color: 'var(--special)',
+                              borderColor: 'var(--special)',
+                            }}
+                          >
+                            {showGoalTimelineAsPercent ? 'Value' : '%'}
+                          </Button>
+                        </Box>
+                        <div className="chart-canvas">
+                          {selectedMainGoalMonthlyCompletionHistory.labels.length === 0 ||
+                          (showGoalTimelineAsPercent &&
+                            (!selectedMainGoalMonthlyCompletionHistory.timelineCompletionValues ||
+                              selectedMainGoalMonthlyCompletionHistory.timelineCompletionValues.length === 0)) ||
+                          (!showGoalTimelineAsPercent &&
+                            (!selectedMainGoalMonthlyCompletionHistory.timelineRawValues ||
+                              selectedMainGoalMonthlyCompletionHistory.timelineRawValues.length === 0)) ? (
+                            <p className="chart-empty">No timeline data available for this goal yet.</p>
+                          ) : (
+                            <LineChart
+                              height={280}
+                              series={[
+                                {
+                                  data: showGoalTimelineAsPercent
+                                    ? selectedMainGoalMonthlyCompletionHistory.timelineCompletionValues
+                                    : selectedMainGoalMonthlyCompletionHistory.timelineRawValues,
+                                  label: showGoalTimelineAsPercent
+                                    ? `Completion % (target ${formatGoalValue(selectedMainGoalProgress.targetValue, selectedMainGoalProgress.metric, selectedMainGoalProgress.targetCurrency)})`
+                                    : `Value (target ${formatGoalValue(selectedMainGoalProgress.targetValue, selectedMainGoalProgress.metric, selectedMainGoalProgress.targetCurrency)})`,
+                                  showMark: false,
+                                },
+                              ]}
+                              xAxis={[
+                                {
+                                  scaleType: 'point',
+                                  data: selectedMainGoalMonthlyCompletionHistory.labels,
+                                },
+                              ]}
+                              yAxis={[{ label: showGoalTimelineAsPercent ? 'Completion %' : `Value (${selectedMainGoalMonthlyCompletionHistory.metricUnit})`, min: 0, max: showGoalTimelineAsPercent ? 100 : undefined }]}
+                            />
+                          )}
+                        </div>
+                      </Box>
+                    )}
+
+                    <Box className="chart-card goal-main-meta-card">
+                      <h2 className="chart-title">Goal Details</h2>
+                      <div className="chart-canvas">
+                        <p className="chart-empty">
+                          {`Metric: ${getGoalMetricLabel(selectedMainGoalProgress.metric)}`}
+                        </p>
+                        <p className="chart-empty">
+                          {`Target: ${formatGoalValue(selectedMainGoalProgress.targetValue, selectedMainGoalProgress.metric, selectedMainGoalProgress.targetCurrency)}`}
+                        </p>
+                        <p className="chart-empty">
+                          {selectedMainGoalProgress.scheduleType === 'deadline'
+                            ? `Schedule: Deadline ${getGoalScheduleLabel(selectedMainGoalProgress)}`
+                            : `Schedule: Frequency ${getGoalScheduleLabel(selectedMainGoalProgress)}`}
+                        </p>
+                      </div>
+                    </Box>
+                  </Box>
+                ) : null}
+              </Box>
+
+              <h1 className="sheet-title text-black">Data</h1>
               <Box className="dashboard-layout">
-              <section className="summary-grid" aria-label="Portfolio summary">
-                <Box className="summary-card">
-                  <p className="summary-label">Total</p>
-                  <p className="summary-value">{formatCurrency(summary.totalMoney, selectedCurrency)}</p>
+                <section className="summary-grid" aria-label="Portfolio summary">
+                  <Box className="summary-card">
+                    <p className="summary-label">Total</p>
+                    <p className="summary-value">{formatCurrency(summary.totalMoney, selectedCurrency)}</p>
+                  </Box>
+                  <Box className="summary-card">
+                    <p className="summary-label">Borrowed</p>
+                    <p className="summary-value">{formatCurrency(summary.borrowed, selectedCurrency)}</p>
+                  </Box>
+                  <Box className="summary-card">
+                    <p className="summary-label">Dividend</p>
+                    <p className="summary-value">{formatCurrency(summary.dividendTotal, selectedCurrency)}</p>
+                  </Box>
+                  <Box className="summary-card">
+                    <p className="summary-label">% (Average)</p>
+                    <p className="summary-value">{formatPercent(summary.percentAverage)}</p>
+                  </Box>
+                  <Box className="summary-card summary-card-large">
+                    <p className="summary-label">Earn (All / Per Trade)</p>
+                    <p className="summary-value">
+                      {formatCurrency(summary.earnAll, selectedCurrency)} / {formatCurrency(summary.earnPerTrade, selectedCurrency)}
+                    </p>
+                  </Box>
+                </section>
+
+                <Box className="chart-card chart-card-timeline">
+                  <h2 className="chart-title">Money Timeline (Total vs Working Capital)</h2>
+                  <div className="chart-canvas">
+                    {moneyTimelineChart.labels.length === 0 ? (
+                      <p className="chart-empty">No timeline data available to display.</p>
+                    ) : (
+                      <LineChart
+                        height={300}
+                        series={[
+                          {
+                            data: moneyTimelineChart.totalMoneyValues,
+                            label: 'Total Money',
+                            showMark: false,
+                          },
+                          {
+                            data: moneyTimelineChart.moneyIHaveValues,
+                            label: 'Money I Have',
+                            showMark: false,
+                          },
+                        ]}
+                        xAxis={[
+                          {
+                            scaleType: 'point',
+                            data: moneyTimelineChart.labels,
+                            valueFormatter: (value, context) =>
+                              context.location === 'tick'
+                                ? formatCompactAxisDate(String(value))
+                                : String(value),
+                          }
+                        ]}
+                      />
+                    )}
+                  </div>
                 </Box>
-                <Box className="summary-card">
-                  <p className="summary-label">Borrowed</p>
-                  <p className="summary-value">{formatCurrency(summary.borrowed, selectedCurrency)}</p>
+
+                <Box className="chart-card chart-card-allocation">
+                  <h2 className="chart-title">Current Holdings Allocation</h2>
+                  <div className="chart-canvas chart-canvas-center">
+                    {holdingsDonutChart.length === 0 ? (
+                      <p className="chart-empty">No holdings allocation data available.</p>
+                    ) : (
+                      <PieChart
+                        height={230}
+                        width={300}
+                        series={[
+                          {
+                            innerRadius: 65,
+                            outerRadius: 110,
+                            paddingAngle: 2,
+                            cornerRadius: 4,
+                            data: holdingsDonutChart,
+                          },
+                        ]}
+                      />
+                    )}
+                  </div>
                 </Box>
-                <Box className="summary-card">
-                  <p className="summary-label">Dividend</p>
-                  <p className="summary-value">{formatCurrency(summary.dividendTotal, selectedCurrency)}</p>
+
+                <Box className="chart-card chart-card-monthly">
+                  <h2 className="chart-title">Monthly Earn / Loss</h2>
+                  <div className="chart-canvas">
+                    {monthlyEarnChart.labels.length === 0 ? (
+                      <p className="chart-empty">No monthly earn/loss data available.</p>
+                    ) : (
+                      <BarChart
+                        height={280}
+                        xAxis={[
+                          {
+                            scaleType: 'band',
+                            data: monthlyEarnChart.labels.map((label) => formatMonthLabel(label)),
+                          },
+                        ]}
+                        yAxis={[
+                          {
+                            label: `Earn / Loss (${selectedCurrency})`,
+                          },
+                        ]}
+                        series={[
+                          {
+                            label: 'Earn / Loss',
+                            color: '#16a34a',
+                            data: monthlyEarnChart.values,
+                          },
+                        ]}
+                      />
+                    )}
+                  </div>
                 </Box>
-                <Box className="summary-card">
-                  <p className="summary-label">% (Average)</p>
-                  <p className="summary-value">{formatPercent(summary.percentAverage)}</p>
+
+                <Box className="sheet-section dashboard-holdings">
+                  {/* <div className="holdings-header"> */}
+                    <h1 className="sheet-title text-black">Current Holdings</h1>
+                    {/* <p className="holdings-status">
+                      {isUsMarketOpen === true
+                        ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
+                        : isUsMarketOpen === false
+                          ? 'Market Closed'
+                          : 'Market Status Unknown'}
+                      {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
+                    </p> */}
+                  {/* </div> */}
+
+                  <TableContainer component={Paper} elevation={0} className="table-shell">
+                    <Table size="small" aria-label="current holdings table">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Stock Name/Number</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Quantity</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Now Price</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Buy In Price</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>$ Earn/Loss</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>% Change</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {holdings.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={6}>No current holdings found.</TableCell>
+                          </TableRow>
+                        ) : (
+                          holdings.map((holding) => {
+                            const nowPriceUsd = resolveLiveQuotePrice(liveQuotes[holding.symbol])
+                            const nowPrice = Number.isFinite(nowPriceUsd)
+                              ? convertAmount(nowPriceUsd, 'USD', selectedCurrency, currencyRates)
+                              : Number.NaN
+                            const buyInPrice = convertAmount(
+                              holding.avgBuyPriceUsd,
+                              'USD',
+                              selectedCurrency,
+                              currencyRates,
+                            )
+
+                            const earnLoss = Number.isFinite(nowPrice)
+                              ? (nowPrice - buyInPrice) * holding.quantity
+                              : Number.NaN
+                            const changePercent = buyInPrice > 0 && Number.isFinite(nowPrice)
+                              ? ((nowPrice - buyInPrice) / buyInPrice) * 100
+                              : Number.NaN
+
+                            return (
+                              <TableRow key={holding.symbol}>
+                                <TableCell>{holding.displayName}</TableCell>
+                                <TableCell>{holding.quantity.toFixed(2)}</TableCell>
+                                <TableCell>
+                                  {Number.isFinite(nowPrice)
+                                    ? formatCurrency(nowPrice, selectedCurrency)
+                                    : '-'}
+                                </TableCell>
+                                <TableCell>{formatCurrency(buyInPrice, selectedCurrency)}</TableCell>
+                                <TableCell
+                                  className={
+                                    Number.isFinite(earnLoss)
+                                      ? earnLoss >= 0
+                                        ? 'value-positive'
+                                        : 'value-negative'
+                                      : undefined
+                                  }
+                                >
+                                  {Number.isFinite(earnLoss)
+                                    ? formatCurrency(earnLoss, selectedCurrency)
+                                    : '-'}
+                                </TableCell>
+                                <TableCell
+                                  className={
+                                    Number.isFinite(changePercent)
+                                      ? changePercent >= 0
+                                        ? 'value-positive'
+                                        : 'value-negative'
+                                      : undefined
+                                  }
+                                >
+                                  {Number.isFinite(changePercent) ? formatPercent(changePercent) : '-'}
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })
+                        )}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
                 </Box>
-                <Box className="summary-card summary-card-earn">
-                  <p className="summary-label">Earn (All / Per Trade)</p>
-                  <p className="summary-value">
-                    {formatCurrency(summary.earnAll, selectedCurrency)} / {formatCurrency(summary.earnPerTrade, selectedCurrency)}
+              </Box>
+            </Box>
+          ) : page === 'goal' ? (
+            <Box className="goal-layout">
+              <Box className="goal-header">
+                <Box>
+                  <h1 className="sheet-title text-black">Goal</h1>
+                  <p className="goal-subtitle">
+                    Set multiple targets and track completion with a live gauge and bar view.
                   </p>
                 </Box>
-              </section>
-
-              <Box className="chart-card chart-card-timeline">
-                <h2 className="chart-title">Money Timeline (Total vs Working Capital)</h2>
-                <div className="chart-canvas">
-                  {moneyTimelineChart.labels.length === 0 ? (
-                    <p className="chart-empty">No timeline data available to display.</p>
-                  ) : (
-                    <LineChart
-                      height={300}
-                      series={[
-                        {
-                          data: moneyTimelineChart.totalMoneyValues,
-                          label: 'Total Money',
-                          showMark: false,
-                        },
-                        {
-                          data: moneyTimelineChart.moneyIHaveValues,
-                          label: 'Money I Have',
-                          showMark: false,
-                        },
-                      ]}
-                      xAxis={[
-                        {
-                          scaleType: 'point',
-                          data: moneyTimelineChart.labels,
-                          valueFormatter: (value, context) =>
-                            context.location === 'tick'
-                              ? formatCompactAxisDate(String(value))
-                              : String(value),
-                        }
-                      ]}
-                    />
-                  )}
-                </div>
+                {selectedGoalProgress ? (
+                  <Box className="goal-highlight">
+                    <p className="goal-highlight-label">{getGoalDisplayTitle(selectedGoalProgress.goal)}</p>
+                    <p className="goal-highlight-value">
+                      {getGoalValueSummary(
+                        selectedGoalProgress.goal,
+                        selectedGoalProgress.displayCurrentValue,
+                        selectedGoalProgress.goal.targetValue,
+                        selectedGoalProgress.goal.targetCurrency,
+                      )}
+                    </p>
+                  </Box>
+                ) : null}
               </Box>
 
-              <Box className="chart-card chart-card-allocation">
-                <h2 className="chart-title">Current Holdings Allocation</h2>
-                <div className="chart-canvas chart-canvas-center">
-                  {holdingsDonutChart.length === 0 ? (
-                    <p className="chart-empty">No holdings allocation data available.</p>
-                  ) : (
-                    <PieChart
-                      height={230}
-                      width={300}
-                      series={[
-                        {
-                          innerRadius: 65,
-                          outerRadius: 110,
-                          paddingAngle: 2,
-                          cornerRadius: 4,
-                          data: holdingsDonutChart,
-                        },
-                      ]}
-                    />
-                  )}
-                </div>
-              </Box>
+              <Box className="goal-grid">
+                <Paper elevation={0} className="goal-card goal-form-card">
+                  <h2 className="chart-title">Create Goal</h2>
+                  <Box component="form" className="goal-form-grid" onSubmit={handleSubmitGoal}>
+                    {GOAL_FORM_CONFIG.filter((field) => shouldShowGoalField(field)).map((field) =>
+                      renderGoalField(field, `goal-field-${field.key}`),
+                    )}
+                    <Box className="add-form-actions">
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        disabled={isSubmittingGoal || !currentUserId}
+                        className={isConfirmingGoal ? 'is-confirming' : ''}
+                      >
+                        {isSubmittingGoal
+                          ? 'Saving...'
+                          : isConfirmingGoal
+                            ? 'Confirm'
+                            : currentUserId
+                              ? 'Save Goal'
+                              : 'Sign in required'}
+                      </Button>
+                    </Box>
+                    {goalMessage ? <Alert severity={goalMessage.type}>{goalMessage.text}</Alert> : null}
+                  </Box>
+                </Paper>
 
-              <Box className="chart-card chart-card-monthly">
-                <h2 className="chart-title">Monthly Earn / Loss</h2>
-                <div className="chart-canvas">
-                  {monthlyEarnChart.labels.length === 0 ? (
-                    <p className="chart-empty">No monthly earn/loss data available.</p>
+                <Paper elevation={0} className="goal-card goal-gauge-card">
+                  <h2 className="chart-title">Selected Goal Progress</h2>
+                  {selectedGoalProgress ? (
+                    <>
+                      <Box className="goal-gauge-wrap">
+                        <Gauge
+                          width={240}
+                          height={240}
+                          value={selectedGoalProgress.completion}
+                          valueMin={0}
+                          valueMax={100}
+                          sx={{ '& .MuiGauge-valueArc': { fill: 'var(--special)' } }}
+                        />
+                      </Box>
+                      <p className="goal-gauge-value">{selectedGoalProgress.completion.toFixed(1)}%</p>
+                      <p className="goal-gauge-label">{getGoalDisplayTitle(selectedGoalProgress.goal)}</p>
+                      <p className="goal-gauge-detail">
+                        {getGoalValueSummary(
+                          selectedGoalProgress.goal,
+                          selectedGoalProgress.displayCurrentValue,
+                          selectedGoalProgress.goal.targetValue,
+                          selectedGoalProgress.goal.targetCurrency,
+                        )}
+                      </p>
+                      <p className="goal-gauge-meta">
+                        {getGoalMetricLabel(selectedGoalProgress.goal.metric)} |{' '}
+                        {selectedGoalProgress.goal.scheduleType === 'deadline'
+                          ? `Deadline ${getGoalScheduleLabel(selectedGoalProgress.goal)}`
+                          : `Frequency ${getGoalScheduleLabel(selectedGoalProgress.goal)}`}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="chart-empty">Add a goal to see progress here.</p>
+                  )}
+                </Paper>
+
+                <Paper elevation={0} className="goal-card goal-bar-card">
+                  <h2 className="chart-title">Goal Completion Bars</h2>
+                  {goalBarChartData.labels.length === 0 ? (
+                    <p className="chart-empty">No goals yet.</p>
                   ) : (
                     <BarChart
-                      height={280}
-                      xAxis={[
-                        {
-                          scaleType: 'band',
-                          data: monthlyEarnChart.labels.map((label) => formatMonthLabel(label)),
-                        },
-                      ]}
-                      yAxis={[
-                        {
-                          label: `Earn / Loss (${selectedCurrency})`,
-                        },
-                      ]}
-                      series={[
-                        {
-                          label: 'Earn / Loss',
-                          color: '#16a34a',
-                          data: monthlyEarnChart.values,
-                        },
-                      ]}
+                      height={260}
+                      xAxis={[{ scaleType: 'band', data: goalBarChartData.labels }]}
+                      yAxis={[{ label: 'Completion %', max: 100 }]}
+                      series={[{ label: 'Completion %', data: goalBarChartData.values, color: '#ff8447' }]}
                     />
                   )}
-                </div>
-              </Box>
+                </Paper>
 
-
-              <Box className="sheet-section dashboard-holdings">
-                {/* <div className="holdings-header"> */}
-                  <h1 className="sheet-title text-black">Current Holdings</h1>
-                  {/* <p className="holdings-status">
-                    {isUsMarketOpen === true
-                      ? `Market Open${isQuoteLoading ? ' - Updating...' : ''}`
-                      : isUsMarketOpen === false
-                        ? 'Market Closed'
-                        : 'Market Status Unknown'}
-                    {quoteUpdatedAt ? ` | Last update: ${new Date(quoteUpdatedAt).toLocaleTimeString()}` : ''}
-                  </p> */}
-                {/* </div> */}
-
-                <TableContainer component={Paper} elevation={0} className="table-shell">
-                  <Table size="small" aria-label="current holdings table">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ fontWeight: 700 }}>Stock Name/Number</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Quantity</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Now Price</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Buy In Price</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>$ Earn/Loss</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>% Change</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {holdings.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6}>No current holdings found.</TableCell>
-                        </TableRow>
-                      ) : (
-                        holdings.map((holding) => {
-                          const nowPriceUsd = resolveLiveQuotePrice(liveQuotes[holding.symbol])
-                          const nowPrice = Number.isFinite(nowPriceUsd)
-                            ? convertAmount(nowPriceUsd, 'USD', selectedCurrency, currencyRates)
-                            : Number.NaN
-                          const buyInPrice = convertAmount(
-                            holding.avgBuyPriceUsd,
-                            'USD',
-                            selectedCurrency,
-                            currencyRates,
-                          )
-
-                          const earnLoss = Number.isFinite(nowPrice)
-                            ? (nowPrice - buyInPrice) * holding.quantity
-                            : Number.NaN
-                          const changePercent = buyInPrice > 0 && Number.isFinite(nowPrice)
-                            ? ((nowPrice - buyInPrice) / buyInPrice) * 100
-                            : Number.NaN
-
-                          return (
-                            <TableRow key={holding.symbol}>
-                              <TableCell>{holding.displayName}</TableCell>
-                              <TableCell>{holding.quantity.toFixed(2)}</TableCell>
-                              <TableCell>
-                                {Number.isFinite(nowPrice)
-                                  ? formatCurrency(nowPrice, selectedCurrency)
-                                  : '-'}
-                              </TableCell>
-                              <TableCell>{formatCurrency(buyInPrice, selectedCurrency)}</TableCell>
-                              <TableCell
-                                className={
-                                  Number.isFinite(earnLoss)
-                                    ? earnLoss >= 0
-                                      ? 'value-positive'
-                                      : 'value-negative'
-                                    : undefined
-                                }
-                              >
-                                {Number.isFinite(earnLoss)
-                                  ? formatCurrency(earnLoss, selectedCurrency)
-                                  : '-'}
-                              </TableCell>
-                              <TableCell
-                                className={
-                                  Number.isFinite(changePercent)
-                                    ? changePercent >= 0
-                                      ? 'value-positive'
-                                      : 'value-negative'
-                                    : undefined
-                                }
-                              >
-                                {Number.isFinite(changePercent) ? formatPercent(changePercent) : '-'}
-                              </TableCell>
-                            </TableRow>
-                          )
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                <Paper elevation={0} className="goal-card goal-list-card">
+                  <h2 className="chart-title">All Goals</h2>
+                  {goalProgressRows.length === 0 ? (
+                    <p className="chart-empty">No goals saved yet.</p>
+                  ) : (
+                    <Box className="goal-list">
+                      {goalProgressRows.map((goal) => (
+                        <Box
+                          key={goal.id}
+                          className={`goal-item${goal.id === selectedGoalId ? ' goal-item-selected' : ''}`}
+                          onClick={() => handleSelectGoal(goal.id)}
+                        >
+                          <Box className="goal-item-main">
+                            <p className="goal-item-name">{getGoalDisplayTitle(goal)}</p>
+                            <p className="goal-item-meta">
+                              {getGoalMetricLabel(goal.metric)} |{' '}
+                              {goal.scheduleType === 'deadline'
+                                ? `Deadline ${getGoalScheduleLabel(goal)}`
+                                : `Frequency ${getGoalScheduleLabel(goal)}`}
+                            </p>
+                            <p className="goal-item-value">
+                              {getGoalValueSummary(goal, goal.displayCurrentValue, goal.targetValue, goal.targetCurrency)}
+                            </p>
+                            <p className="goal-item-progress">{goal.completion.toFixed(1)}% complete</p>
+                          </Box>
+                          <Button
+                            variant="text"
+                            className="live-unfollow-button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleDeleteGoal(goal.id)
+                            }}
+                            aria-label={`Delete goal ${getGoalDisplayTitle(goal)}`}
+                            sx={{ minWidth: 36, width: 36, height: 36, borderRadius: '50%' }}
+                          >
+                            <MdCancel size={20} />
+                          </Button>
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
+                </Paper>
               </Box>
             </Box>
-            </Box>
+
           ) : page === 'live' ? (
             <Box>
               <h1 className="sheet-title text-black">Live US Stocks</h1>

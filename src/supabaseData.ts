@@ -43,6 +43,30 @@ export type SheetDataWithIds = {
 export type UserTableName = 'Stocks' | 'Dividend' | 'Money Move'
 export type RowMutationAction = 'update' | 'delete'
 
+export type GoalScheduleType = 'frequency' | 'deadline'
+
+export type GoalRow = {
+  id: string
+  user_id: string
+  metric: string
+  target_value: number | string
+  target_currency: string
+  schedule_type: GoalScheduleType
+  frequency: string | null
+  deadline: string | null
+  created_at: string
+}
+
+export type GoalInsertPayload = {
+  id: string
+  metric: string
+  targetValue: number
+  targetCurrency: string
+  scheduleType: GoalScheduleType
+  frequency: string | null
+  deadline: string | null
+}
+
 const STOCK_HEADERS = ['Stock', 'Currency', 'Price', 'Action', 'Time', 'Quantity', 'Handling Fees']
 const DIVIDEND_HEADERS = ['Stock', 'Currency', 'Div', 'Time']
 const MONEY_MOVE_HEADERS = ['Name', 'Currency', 'Price', 'Time', 'Action']
@@ -136,6 +160,47 @@ export async function loadUserSheetData(userId: string): Promise<{
     stocks: { headers: STOCK_HEADERS, rows: stocksRows, ids: stocksIds },
     dividend: { headers: DIVIDEND_HEADERS, rows: dividendRows, ids: dividendIds },
     moneyMove: { headers: MONEY_MOVE_HEADERS, rows: moneyMoveRows, ids: moneyMoveIds },
+  }
+}
+
+export async function loadUserGoals(userId: string): Promise<GoalRow[]> {
+  const { data, error } = await supabase
+    .from('goals')
+    .select('id, user_id, metric, target_value, target_currency, schedule_type, frequency, deadline, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  return (data ?? []) as GoalRow[]
+}
+
+export async function insertUserGoal(userId: string, goal: GoalInsertPayload): Promise<void> {
+  const payload = {
+    id: goal.id,
+    user_id: userId,
+    metric: goal.metric,
+    target_value: goal.targetValue,
+    target_currency: goal.targetCurrency,
+    schedule_type: goal.scheduleType,
+    frequency: goal.frequency,
+    deadline: goal.deadline,
+  }
+
+  const { error } = await supabase.from('goals').insert(payload)
+
+  if (error) {
+    throw new Error(error.message)
+  }
+}
+
+export async function deleteUserGoal(goalId: string): Promise<void> {
+  const { error } = await supabase.from('goals').delete().eq('id', goalId).select()
+
+  if (error) {
+    throw new Error(error.message)
   }
 }
 
