@@ -30,7 +30,6 @@ import {
   MdOutlineAdd,
   MdSettings,
   MdShowChart,
-  MdTrendingUp,
   MdBrightnessAuto,
   MdDarkMode,
   MdLightMode,
@@ -1001,7 +1000,7 @@ function getGoalValueSummary(goal: GoalRecord, currentValue: number, targetValue
   // return `${Math.max(0, targetValue).toFixed(0)} trades`
 }
 
-function getGoalValue(goal: GoalRecord, currentValue: number, targetValue: number, currency: CurrencyCode): string {
+function getGoalValue(goal: GoalRecord, _currentValue: number, targetValue: number, currency: CurrencyCode): string {
   const unit = getGoalMetricUnit(goal.metric)
 
   if (unit === 'currency') {
