@@ -1000,12 +1000,37 @@ function getGoalValueSummary(goal: GoalRecord, currentValue: number, targetValue
   // return `${Math.max(0, targetValue).toFixed(0)} trades`
 }
 
+function parseCurrencyToNumber(input: string): number {
+  return parseFloat(input.replace(/[^\d.-]/g, '')) || 0;
+}
+
+function formatNumberAbbrev(num: number): string {
+  if (num === 0) return '0';
+  const absNum = Math.abs(num);
+  const sign = num < 0 ? '-' : '';
+  const suffixes = ['', 'K', 'M', 'B'];
+  let i = 0;
+  let scaled = absNum;
+  while (scaled >= 1000 && i < 3) {
+    scaled /= 1000;
+    i++;
+  }
+  return sign + scaled.toFixed(1).replace(/\.0$/, '') + suffixes[i];
+}
+
+function formatCurrencyAbbrev(input: string): string {
+  const num = parseCurrencyToNumber(input);
+  const symbol = input.includes('HK$') ? 'HK$' : '$';
+  return symbol + formatNumberAbbrev(num);
+}
+
+
 function getGoalValue(goal: GoalRecord, _currentValue: number, targetValue: number, currency: CurrencyCode): string {
   const unit = getGoalMetricUnit(goal.metric)
 
   if (unit === 'currency') {
     // return `${formatGoalValue(currentValue, goal.metric, currency)} / ${formatGoalValue(targetValue, goal.metric, currency)}`
-    return `${formatGoalValue(targetValue, goal.metric, currency)}`
+    return `${formatCurrencyAbbrev(formatGoalValue(targetValue, goal.metric, currency))}`
   }
 
   if (unit === 'percent') {
