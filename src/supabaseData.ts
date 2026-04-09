@@ -53,6 +53,7 @@ export type GoalRow = {
   target_currency: string
   schedule_type: GoalScheduleType
   frequency: string | null
+  frequency_number: number | string | null
   deadline: string | null
   created_at: string
 }
@@ -64,6 +65,7 @@ export type GoalInsertPayload = {
   targetCurrency: string
   scheduleType: GoalScheduleType
   frequency: string | null
+  frequencyNumber: number
   deadline: string | null
 }
 
@@ -166,7 +168,7 @@ export async function loadUserSheetData(userId: string): Promise<{
 export async function loadUserGoals(userId: string): Promise<GoalRow[]> {
   const { data, error } = await supabase
     .from('goals')
-    .select('id, user_id, metric, target_value, target_currency, schedule_type, frequency, deadline, created_at')
+    .select('id, user_id, metric, target_value, target_currency, schedule_type, frequency, frequency_number, deadline, created_at')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
@@ -186,6 +188,7 @@ export async function insertUserGoal(userId: string, goal: GoalInsertPayload): P
     target_currency: goal.targetCurrency,
     schedule_type: goal.scheduleType,
     frequency: goal.frequency,
+    frequency_number: goal.frequencyNumber,
     deadline: goal.deadline,
   }
 

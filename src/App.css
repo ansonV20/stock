@@ -748,6 +748,17 @@
   gap: 12px;
 }
 
+.goal-form-frequency-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+  gap: 12px;
+}
+
+.goal-form-frequency-row .goal-field-frequency,
+.goal-form-frequency-row .goal-field-frequencyNumber {
+  min-width: 0;
+}
+
 .goal-form-grid .MuiInputBase-root,
 .goal-form-grid .MuiInputLabel-root,
 .goal-form-grid .MuiSvgIcon-root {

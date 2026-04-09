@@ -142,7 +142,7 @@ type AddFieldConfig = {
 }
 
 type GoalMetric = 'total-money' | 'earn-money' | 'earn-percent' | 'avg-earn-percent' | 'trade-count'
-type GoalFrequency = 'day' | 'month' | 'year' | 'custom'
+type GoalFrequency = 'day' | 'week' | 'month' | 'year'
 
 type GoalFieldConfig = {
   key: string
@@ -161,6 +161,7 @@ type GoalRecord = {
   targetCurrency: CurrencyCode
   scheduleType: GoalScheduleType
   frequency: GoalFrequency | null
+  frequencyNumber: number
   deadline: string | null
   createdAt: string
 }
@@ -270,9 +271,9 @@ const GOAL_METRIC_OPTIONS: GoalMetricOption[] = [
 
 const GOAL_FREQUENCY_OPTIONS: Array<{ value: GoalFrequency; label: string }> = [
   { value: 'day', label: 'Day' },
+  { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
   { value: 'year', label: 'Year' },
-  { value: 'custom', label: 'Custom period' },
 ]
 
 const GOAL_FORM_CONFIG: GoalFieldConfig[] = [
@@ -308,6 +309,14 @@ const GOAL_FORM_CONFIG: GoalFieldConfig[] = [
     required: true,
     options: GOAL_FREQUENCY_OPTIONS.map((option) => option.value),
     defaultValue: 'month',
+  },
+  {
+    key: 'frequencyNumber',
+    label: 'Frequency number',
+    inputType: 'number',
+    required: true,
+    step: '1',
+    defaultValue: '1',
   },
   { key: 'deadline', label: 'Deadline', inputType: 'date' },
 ]
@@ -800,9 +809,12 @@ function mapGoalRowToRecord(row: GoalRow): GoalRecord | null {
 
   const targetCurrency = resolveCurrencyCode(row.target_currency)
   const frequency =
-    row.frequency === 'day' || row.frequency === 'month' || row.frequency === 'year' || row.frequency === 'custom'
+    row.frequency === 'day' || row.frequency === 'week' || row.frequency === 'month' || row.frequency === 'year'
       ? row.frequency
       : null
+  const parsedFrequencyNumber = Number(row.frequency_number)
+  const frequencyNumber =
+    Number.isInteger(parsedFrequencyNumber) && parsedFrequencyNumber > 0 ? parsedFrequencyNumber : 1
 
   return {
     id: row.id,
@@ -811,6 +823,7 @@ function mapGoalRowToRecord(row: GoalRow): GoalRecord | null {
     targetCurrency,
     scheduleType: row.schedule_type,
     frequency,
+    frequencyNumber,
     deadline: typeof row.deadline === 'string' ? row.deadline : null,
     createdAt: row.created_at,
   }
@@ -865,54 +878,70 @@ function getGoalScheduleLabel(goal: GoalRecord): string {
   }
 
   if (!goal.frequency) {
-    return 'Custom period'
+    return '1 Month'
   }
 
-  return GOAL_FREQUENCY_OPTIONS.find((option) => option.value === goal.frequency)?.label ?? goal.frequency
+  const frequencyLabel =
+    GOAL_FREQUENCY_OPTIONS.find((option) => option.value === goal.frequency)?.label ?? goal.frequency
+  const frequencyNumber = Math.max(1, Math.trunc(goal.frequencyNumber || 1))
+
+  if (frequencyNumber === 1) {
+    return `1 ${frequencyLabel}`
+  }
+
+  return `${frequencyNumber} ${frequencyLabel}s`
 }
 
 function getGoalDisplayTitle(goal: GoalRecord): string {
   return `${getGoalMetricLabel(goal.metric)}`
 }
 
-function getPeriodStartEnd(frequency: GoalFrequency): { start: Date; end: Date } | null {
-  if (frequency === 'custom') {
-    return null
-  }
-
+function getPeriodStartEnd(frequency: GoalFrequency, frequencyNumber: number): { start: Date; end: Date } {
+  const normalizedFrequencyNumber = Math.max(1, Math.trunc(frequencyNumber || 1))
   const now = new Date()
   const start = new Date(now)
   start.setHours(0, 0, 0, 0)
 
   if (frequency === 'day') {
+    start.setDate(start.getDate() - (normalizedFrequencyNumber - 1))
     const end = new Date(start)
-    end.setDate(end.getDate() + 1)
+    end.setDate(end.getDate() + normalizedFrequencyNumber)
+    return { start, end }
+  }
+
+  if (frequency === 'week') {
+    const dayOfWeek = start.getDay()
+    const daysSinceMonday = (dayOfWeek + 6) % 7
+    start.setDate(start.getDate() - daysSinceMonday - (normalizedFrequencyNumber - 1) * 7)
+    const end = new Date(start)
+    end.setDate(end.getDate() + normalizedFrequencyNumber * 7)
     return { start, end }
   }
 
   if (frequency === 'month') {
     start.setDate(1)
+    start.setMonth(start.getMonth() - (normalizedFrequencyNumber - 1))
     const end = new Date(start)
-    end.setMonth(end.getMonth() + 1)
+    end.setMonth(end.getMonth() + normalizedFrequencyNumber)
     return { start, end }
   }
 
   if (frequency === 'year') {
     start.setMonth(0, 1)
+    start.setFullYear(start.getFullYear() - (normalizedFrequencyNumber - 1))
     const end = new Date(start)
-    end.setFullYear(end.getFullYear() + 1)
+    end.setFullYear(end.getFullYear() + normalizedFrequencyNumber)
     return { start, end }
   }
 
-  return null
+  return {
+    start,
+    end: now,
+  }
 }
 
-function isWithinGoalPeriod(date: Date, frequency: GoalFrequency): boolean {
-  const range = getPeriodStartEnd(frequency)
-
-  if (!range) {
-    return true
-  }
+function isWithinGoalPeriod(date: Date, frequency: GoalFrequency, frequencyNumber: number): boolean {
+  const range = getPeriodStartEnd(frequency, frequencyNumber)
 
   const timestamp = date.getTime()
   return timestamp >= range.start.getTime() && timestamp < range.end.getTime()
@@ -948,18 +977,18 @@ function getGoalMetricValue(goal: GoalRecord, snapshot: GoalMetricSnapshot, peri
   }
 
   if (goal.metric === 'earn-money') {
-    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.earnMoney : periodSnapshot.earnMoney
+    return goal.scheduleType === 'deadline' ? snapshot.earnMoney : periodSnapshot.earnMoney
   }
 
   if (goal.metric === 'earn-percent') {
-    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.earnPercent : periodSnapshot.earnPercent
+    return goal.scheduleType === 'deadline' ? snapshot.earnPercent : periodSnapshot.earnPercent
   }
 
   if (goal.metric === 'avg-earn-percent') {
-    return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.avgEarnPercent : periodSnapshot.avgEarnPercent
+    return goal.scheduleType === 'deadline' ? snapshot.avgEarnPercent : periodSnapshot.avgEarnPercent
   }
 
-  return goal.scheduleType === 'deadline' || goal.frequency === 'custom' ? snapshot.tradeCount : periodSnapshot.tradeCount
+  return goal.scheduleType === 'deadline' ? snapshot.tradeCount : periodSnapshot.tradeCount
 }
 
 function getGoalCompletion(
@@ -1586,8 +1615,12 @@ function App() {
           if (!next.frequency) {
             next.frequency = 'month'
           }
+          if (!next.frequencyNumber) {
+            next.frequencyNumber = '1'
+          }
         } else {
           next.frequency = ''
+          next.frequencyNumber = '1'
           next.deadline = next.deadline || ''
         }
       }
@@ -1642,6 +1675,7 @@ function App() {
     const targetCurrency = resolveCurrencyCode(goalFormValues.targetCurrency)
     const scheduleType = goalFormValues.scheduleType as GoalScheduleType
     const frequency = goalFormValues.frequency as GoalFrequency
+    const frequencyNumber = Math.max(1, Math.trunc(Number(goalFormValues.frequencyNumber)))
     const deadline = goalFormValues.deadline.trim()
 
     if (!Number.isFinite(targetValue) || targetValue <= 0) {
@@ -1662,6 +1696,12 @@ function App() {
       return
     }
 
+    if (scheduleType === 'frequency' && (!Number.isInteger(frequencyNumber) || frequencyNumber <= 0)) {
+      setIsConfirmingGoal(false)
+      setGoalMessage({ type: 'error', text: 'Frequency number must be a positive whole number.' })
+      return
+    }
+
     if (scheduleType === 'deadline' && !deadline) {
       setIsConfirmingGoal(false)
       setGoalMessage({ type: 'error', text: 'Deadline is required when deadline mode is selected.' })
@@ -1679,6 +1719,7 @@ function App() {
         targetCurrency,
         scheduleType,
         frequency: scheduleType === 'frequency' ? frequency : null,
+        frequencyNumber: scheduleType === 'frequency' ? frequencyNumber : 1,
         deadline: scheduleType === 'deadline' ? deadline : null,
         createdAt: new Date().toISOString(),
       }
@@ -1690,6 +1731,7 @@ function App() {
         targetCurrency,
         scheduleType,
         frequency: newGoal.frequency,
+        frequencyNumber: newGoal.frequencyNumber,
         deadline: newGoal.deadline,
       })
 
@@ -2180,6 +2222,29 @@ function App() {
     )
   }
 
+  const renderGoalFields = () => {
+    return GOAL_FORM_CONFIG.filter((field) => shouldShowGoalField(field)).map((field) => {
+      if (field.key === 'frequency') {
+        const frequencyNumberField = GOAL_FORM_CONFIG.find((item) => item.key === 'frequencyNumber')
+
+        if (frequencyNumberField && shouldShowGoalField(frequencyNumberField)) {
+          return (
+            <Box className="goal-form-frequency-row" key="goal-frequency-row">
+              {renderGoalField(field, 'goal-field-frequency')}
+              {renderGoalField(frequencyNumberField, 'goal-field-frequencyNumber')}
+            </Box>
+          )
+        }
+      }
+
+      if (field.key === 'frequencyNumber') {
+        return null
+      }
+
+      return renderGoalField(field, `goal-field-${field.key}`)
+    })
+  }
+
   const shouldShowGoalField = (field: GoalFieldConfig): boolean => {
     const selectedMetric = goalFormValues.metric as GoalMetric
     const selectedScheduleType = goalFormValues.scheduleType as GoalScheduleType
@@ -2189,6 +2254,10 @@ function App() {
     }
 
     if (field.key === 'frequency') {
+      return selectedScheduleType === 'frequency'
+    }
+
+    if (field.key === 'frequencyNumber') {
       return selectedScheduleType === 'frequency'
     }
 
@@ -2936,7 +3005,14 @@ function App() {
     const avgEarnPercent = summary.percentAverage
     const tradeCount = stocksData.rows.length
 
-    const buildPeriodMetrics = (frequency: Exclude<GoalFrequency, 'custom'>): GoalPeriodMetrics => {
+    const fullPeriodMetrics: GoalPeriodMetrics = {
+      earnMoney,
+      earnPercent,
+      avgEarnPercent,
+      tradeCount,
+    }
+
+    const buildPeriodMetrics = (frequency: GoalFrequency, frequencyNumber: number): GoalPeriodMetrics => {
       const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
       const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
       const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
@@ -2953,7 +3029,7 @@ function App() {
       if (stocksDateIndex !== -1 && profitLossIndex !== -1) {
         displayStocksData.rows.forEach((row, rowIndex) => {
           const date = parseDateValue(stocksData.rows[rowIndex]?.[stocksDateIndex] ?? '')
-          if (!date || !isWithinGoalPeriod(date, frequency)) {
+          if (!date || !isWithinGoalPeriod(date, frequency, frequencyNumber)) {
             return
           }
 
@@ -2977,7 +3053,7 @@ function App() {
       if (dividendAmountIndex !== -1 && dividendDateIndex !== -1) {
         dividendData.rows.forEach((row) => {
           const date = parseDateValue(row[dividendDateIndex] ?? '')
-          if (!date || !isWithinGoalPeriod(date, frequency)) {
+          if (!date || !isWithinGoalPeriod(date, frequency, frequencyNumber)) {
             return
           }
 
@@ -3007,17 +3083,8 @@ function App() {
         avgEarnPercent,
         tradeCount,
       },
-      periodMetrics: {
-        day: buildPeriodMetrics('day'),
-        month: buildPeriodMetrics('month'),
-        year: buildPeriodMetrics('year'),
-        custom: {
-          earnMoney,
-          earnPercent,
-          avgEarnPercent,
-          tradeCount,
-        },
-      },
+      fullPeriodMetrics,
+      buildPeriodMetrics,
     }
   }, [summary, stocksData, dividendData, displayStocksData, selectedCurrency, currencyRates])
 
@@ -3031,8 +3098,10 @@ function App() {
 
   const goalProgressRows = useMemo(() => {
     return goalRecords.map((goal) => {
-      const periodKey = goal.scheduleType === 'deadline' ? 'custom' : goal.frequency ?? 'custom'
-      const periodSnapshot = goalSnapshot.periodMetrics[periodKey]
+      const periodSnapshot =
+        goal.scheduleType === 'deadline' || !goal.frequency
+          ? goalSnapshot.fullPeriodMetrics
+          : goalSnapshot.buildPeriodMetrics(goal.frequency, goal.frequencyNumber)
       const currentValue = getGoalMetricValue(goal, goalSnapshot.snapshot, periodSnapshot)
       const displayCurrentValue = getGoalValueInTargetCurrency(goal, currentValue, selectedCurrency, currencyRates)
       const completion = getGoalCompletion(
@@ -3057,8 +3126,10 @@ function App() {
       return null
     }
 
-    const periodKey = selectedGoal.scheduleType === 'deadline' ? 'custom' : selectedGoal.frequency ?? 'custom'
-    const periodSnapshot = goalSnapshot.periodMetrics[periodKey]
+    const periodSnapshot =
+      selectedGoal.scheduleType === 'deadline' || !selectedGoal.frequency
+        ? goalSnapshot.fullPeriodMetrics
+        : goalSnapshot.buildPeriodMetrics(selectedGoal.frequency, selectedGoal.frequencyNumber)
     const currentValue = getGoalMetricValue(selectedGoal, goalSnapshot.snapshot, periodSnapshot)
     const displayCurrentValue = getGoalValueInTargetCurrency(
       selectedGoal,
@@ -4128,9 +4199,7 @@ function App() {
           <Box component="form" className="add-form-grid goal-form-grid" onSubmit={handleSubmitGoal}>
             <h2 style={{ textAlign: 'center', marginBottom: '1.5rem', color: 'var(--text)' }}>Create New Goal</h2>
 
-            {GOAL_FORM_CONFIG.filter((field) => shouldShowGoalField(field)).map((field) =>
-              renderGoalField(field, `goal-field-${field.key}`),
-            )}
+            {renderGoalFields()}
 
             <Box className="add-form-actions">
               <Button
@@ -4147,13 +4216,13 @@ function App() {
                       ? 'Save Goal'
                       : 'Sign in required'}
               </Button>
-              <Button
+              {/* <Button
                 type="button"
                 variant="outlined"
                 onClick={handleCloseGoalModalMain}
               >
                 Cancel
-              </Button>
+              </Button> */}
             </Box>
 
             {goalMessage ? <Alert severity={goalMessage.type}>{goalMessage.text}</Alert> : null}
@@ -4891,9 +4960,7 @@ function App() {
                 <Paper elevation={0} className="goal-card goal-form-card">
                   <h2 className="chart-title">Create Goal</h2>
                   <Box component="form" className="goal-form-grid" onSubmit={handleSubmitGoal}>
-                    {GOAL_FORM_CONFIG.filter((field) => shouldShowGoalField(field)).map((field) =>
-                      renderGoalField(field, `goal-field-${field.key}`),
-                    )}
+                    {renderGoalFields()}
                     <Box className="add-form-actions">
                       <Button
                         type="submit"
