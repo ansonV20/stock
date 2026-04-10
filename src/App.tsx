@@ -34,7 +34,8 @@ import {
   MdDarkMode,
   MdLightMode,
   MdCancel,
-  MdEdit
+  MdEdit,
+  MdQueryStats
 } from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
@@ -1213,6 +1214,10 @@ function App() {
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false)
   const [viewingGoalIdMain, setViewingGoalIdMain] = useState<string | null>(null)
   const [showGoalTimelineAsPercent, setShowGoalTimelineAsPercent] = useState(true)
+  const [isToolsModalOpen, setIsToolsModalOpen] = useState(false)
+  const [calcBudgetInput, setCalcBudgetInput] = useState('')
+  const [calcStockPriceInput, setCalcStockPriceInput] = useState('')
+  const [calcSelectedSymbol, setCalcSelectedSymbol] = useState<string | null>(null)
   const userSymbolsReadyForIdRef = useRef<string | null>(null)
   const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -4191,13 +4196,13 @@ function App() {
             height: 'auto',
             maxHeight: '90vh',
             overflow: 'auto',
-            backgroundColor: 'var(--bg)',
-            color: 'var(--text)',
+            backgroundColor: 'var(--white)',
+            color: 'var(--black)',
             padding: '2rem',
           }}
         >
           <Box component="form" className="add-form-grid goal-form-grid" onSubmit={handleSubmitGoal}>
-            <h2 style={{ textAlign: 'center', marginBottom: '1.5rem', color: 'var(--text)' }}>Create New Goal</h2>
+            <h1 className='sheet-title-box text-black' >Create New Goal</h1>
 
             {renderGoalFields()}
 
@@ -4244,6 +4249,39 @@ function App() {
     return value.toFixed(2)
   }
 
+  const latestMoneyIHave =
+    moneyTimelineChart.moneyIHaveValues.length > 0
+      ? moneyTimelineChart.moneyIHaveValues[moneyTimelineChart.moneyIHaveValues.length - 1]
+      : 0
+
+  const selectedLivePriceUsd =
+    calcSelectedSymbol && liveQuotes[calcSelectedSymbol]
+      ? resolveLiveQuotePrice(liveQuotes[calcSelectedSymbol])
+      : Number.NaN
+  const selectedLivePrice = Number.isFinite(selectedLivePriceUsd)
+    ? convertAmount(selectedLivePriceUsd, 'USD', selectedCurrency, currencyRates)
+    : Number.NaN
+
+  const handleOpenToolsModal = () => {
+    if (!calcBudgetInput && Number.isFinite(latestMoneyIHave)) {
+      setCalcBudgetInput(latestMoneyIHave.toFixed(2))
+    }
+
+    setIsToolsModalOpen(true)
+  }
+
+  const calcBudget = Number(calcBudgetInput)
+  const calcStockPrice = Number(calcStockPriceInput)
+  const canCalculateBuyCount =
+    Number.isFinite(calcBudget) &&
+    Number.isFinite(calcStockPrice) &&
+    calcBudget > 0 &&
+    calcStockPrice > 0
+  const maxBuyShares = canCalculateBuyCount ? Math.floor(calcBudget / calcStockPrice) : 0
+  const remainingMoney = canCalculateBuyCount
+    ? Number((calcBudget - maxBuyShares * calcStockPrice).toFixed(2))
+    : 0
+
   return (
     <main className="page">
       <header className="page-header">
@@ -4273,30 +4311,6 @@ function App() {
           >
             <MdDataUsage size={20} />
           </Button>
-          {/* <Button
-            variant={page === 'goal' ? 'contained' : 'outlined'}
-            sx={{
-              width: 40,
-              minWidth: 40,
-              height: 40,
-              padding: 0,
-              borderRadius: '50%',
-              backgroundColor: 'var(--bg)',
-              color: 'var(--wbg)',
-              borderColor: 'var(--wbg)',
-              '&.MuiButton-contained': {
-                backgroundColor: 'var(--special)',
-                color: 'var(--text)',
-                '&:hover': {
-                  borderColor: 'var(--accent)',
-                  opacity: 0.92,
-                },
-              },
-            }}
-            onClick={() => setPage('goal')}
-          >
-            <MdTrendingUp size={20} />
-          </Button> */}
           <Button
             variant={page === 'live' ? 'contained' : 'outlined'}
             sx={{
@@ -4499,6 +4513,149 @@ function App() {
         </div>
         </Box>
       </header>
+
+      <Box className="fixed-button">
+        <Button
+          variant="contained"
+          sx={{
+                width: 50,
+                minWidth: 50,
+                height: 50,
+                padding: 0,
+                borderRadius: '50%',
+                backgroundColor: 'var(--bg)', 
+                color: 'var(--wbg)',
+                borderColor: 'var(--wbg)',
+                '&.MuiButton-contained': {
+                backgroundColor: 'var(--special)',
+                color: 'var(--text)',
+                '&:hover': {
+                  borderColor: 'var(--accent)',
+                  opacity: 0.92,
+                  },
+                }
+              }}
+          onClick={handleOpenToolsModal}
+        >
+          <MdQueryStats size={20} />
+        </Button>
+      </Box>
+
+      <Modal
+        open={isToolsModalOpen}
+        onClose={() => setIsToolsModalOpen(false)}
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+        }}
+      >
+        <Box className="tools-modal">
+            <h1 className="sheet-title-box text-black">Extra Functions</h1>
+            {/* <Button variant="text" className="live-unfollow-button" onClick={() => setIsToolsModalOpen(false)}>
+              <MdCancel size={20} />
+            </Button> */}
+
+          <Box className="tools-section">
+            <h3 className="tools-section-title">Stock Buy Calculator</h3>
+            {/* <p className="tools-section-note">Estimate how many shares you can buy with your Money I Have balance.</p> */}
+
+            <Box className="tools-calc-grid">
+              <TextField
+                type="number"
+                label={`Money Available (Money I Have, ${selectedCurrency})`}
+                value={calcBudgetInput}
+                onChange={(event) => setCalcBudgetInput(event.target.value)}
+                inputProps={{ min: '0', step: '0.01' }}
+                size="small"
+                variant="standard" 
+              />
+              <Autocomplete
+                options={liveSymbols}
+                value={calcSelectedSymbol}
+                onChange={(_event, value) => {
+                  setCalcSelectedSymbol(value)
+
+                  if (value) {
+                    const quote = liveQuotes[value]
+                    const quotePriceUsd = resolveLiveQuotePrice(quote)
+
+                    if (Number.isFinite(quotePriceUsd)) {
+                      const convertedPrice = convertAmount(
+                        quotePriceUsd,
+                        'USD',
+                        selectedCurrency,
+                        currencyRates,
+                      )
+
+                      if (Number.isFinite(convertedPrice)) {
+                        setCalcStockPriceInput(convertedPrice.toFixed(2))
+                      }
+                    }
+                  }
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Live Symbol (optional)"
+                    size="small"
+                    variant="standard" 
+                  />
+                )}
+              />
+              <TextField
+                type="number"
+                label={`Stock Price (manual or live, ${selectedCurrency})`}
+                value={calcStockPriceInput}
+                onChange={(event) => setCalcStockPriceInput(event.target.value)}
+                inputProps={{ min: '0', step: '0.01' }}
+                size="small"
+                variant="standard" 
+              />
+            </Box>
+
+            {calcSelectedSymbol ? (
+              <p className="tools-section-note">
+                {Number.isFinite(selectedLivePrice)
+                  ? `Live price for ${calcSelectedSymbol}: ${formatCurrency(selectedLivePrice, selectedCurrency)} (auto-filled)`
+                  : `No live quote available now for ${calcSelectedSymbol}. You can still type price manually.`}
+              </p>
+            ) : null}
+
+            {canCalculateBuyCount ? (
+              <p className="tools-calc-result">
+                You can buy <span style={{ fontWeight: 700, color: 'var(--special)' }}>{maxBuyShares}</span> share{maxBuyShares === 1 ? '' : 's'} and keep <span style={{ fontWeight: 700, color: 'var(--special)' }}>{formatCurrency(remainingMoney, selectedCurrency)}</span> remaining.
+              </p>
+            ) : (
+              <p className="tools-calc-result">Enter valid values above to calculate your buy count.</p>
+            )}
+          </Box>
+
+          <Divider className="live-mode-divider" />
+
+          <Box className="tools-section">
+            <h3 className="tools-section-title">Useful Links</h3>
+            <Box className="tools-links">
+              <a
+                href="https://finance.yahoo.com/news/"
+                target="_blank"
+                rel="noreferrer"
+                className="tools-link"
+              >
+                Yahoo Finance News
+              </a>
+              <a
+                href="https://www.tradingview.com/heatmap/stock/"
+                target="_blank"
+                rel="noreferrer"
+                className="tools-link"
+              >
+                S&P 500 Heatmap
+              </a>
+            </Box>
+          </Box>
+        </Box>
+      </Modal>
 
       {renderEditModal()}
       {renderGoalModal()}

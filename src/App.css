@@ -224,6 +224,14 @@
   color: var(--text);
 }
 
+.sheet-title-box {
+  text-align: left;
+  margin: 0 0 10px;
+  padding: 30px 0 2px 0;
+  font-weight: 700;
+  color: var(--blakc);
+}
+
 .user-title {
   text-align: left;
   margin: 0;
@@ -265,8 +273,8 @@
   border-radius: 20px;
   padding: 16px;
   /* background: linear-gradient(180deg, var(--text), var(--wbg)); */
-  background: var(--text);
-  color: var(--bg);
+  background: var(--true-white);
+  color: var(--black);
 }
 
 .summary-card-large {
@@ -275,7 +283,7 @@
 
 .summary-label {
   margin: 0;
-  color: var(--bg);
+  color: var(--black);
   font-size: 0.9rem;
   text-wrap: nowrap;
 }
@@ -285,14 +293,14 @@
   margin: 8px 0 0;
   font-size: 1.15rem;
   font-weight: 700;
-  color: var(--bg);
+  color: var(--black);
 }
 
 .chart-card {
   /* border: 1px solid var(--border); */
   border-radius: 20px;
   padding: 16px;
-  background: var(--text);
+  background: var(--true-white);
   /* background: linear-gradient(180deg, var(--accent), var(--accent-bg)); */
 }
 
@@ -322,7 +330,7 @@
   margin: 0 0 10px;
   font-size: 1rem;
   font-weight: 700;
-  color: var(--bg);
+  color: var(--black);
 }
 
 .chart-canvas {
@@ -337,7 +345,7 @@
 
 .chart-empty {
   margin: 12px 0;
-  color: var(--bg);
+  color: var(--black);
 }
 
 .value-positive {
@@ -504,7 +512,7 @@
   border-top-left-radius: 0px !important;
   min-height: 500px;
   padding: 18px;
-  background: var(--text) !important;
+  background: var(--true-white) !important;
   display: flex;
 }
 
@@ -570,7 +578,7 @@
 .add-table-button.MuiButton-root {
   padding: 0;
   min-width: 0;
-  color: var(--bg);
+  color: var(--special);
   text-transform: none;
   font-size: 2.2rem;
   line-height: 1;
@@ -592,7 +600,7 @@
 .add-form-grid .MuiInputBase-root,
 .add-form-grid .MuiInputLabel-root,
 .add-form-grid .MuiSvgIcon-root {
-  color: var(--bg);
+  color: var(--black);
 }
 
 .add-form-grid .MuiOutlinedInput-notchedOutline {
@@ -732,8 +740,8 @@
 .goal-card {
   border-radius: 20px;
   padding: 18px;
-  background: var(--text);
-  color: var(--bg);
+  background: var(--white);
+  color: var(--black);
 }
 
 .goal-form-card,
@@ -754,6 +762,10 @@
   gap: 12px;
 }
 
+/* .goal-field-frequencyNumber {
+  color: var(--black) !important;
+} */
+
 .goal-form-frequency-row .goal-field-frequency,
 .goal-form-frequency-row .goal-field-frequencyNumber {
   min-width: 0;
@@ -762,7 +774,7 @@
 .goal-form-grid .MuiInputBase-root,
 .goal-form-grid .MuiInputLabel-root,
 .goal-form-grid .MuiSvgIcon-root {
-  color: var(--bg);
+  color: var(--black);
 }
 
 .goal-form-grid .MuiOutlinedInput-notchedOutline {
@@ -801,7 +813,7 @@
   text-align: center;
   font-size: 2rem;
   font-weight: 700;
-  color: var(--bg);
+  color: var(--black);
 }
 
 .goal-gauge-label {
@@ -809,7 +821,7 @@
   text-align: center;
   font-size: 1rem;
   font-weight: 700;
-  color: var(--bg);
+  color: var(--black);
 }
 
 .goal-gauge-detail,
@@ -907,7 +919,7 @@
   min-width: 290px;
   border-radius: 20px;
   padding: 14px;
-  background: #fff;
+  background: var(--true-white);
   color: var(--text);
   cursor: pointer;
   border: 1px solid transparent;
@@ -959,6 +971,111 @@
   grid-row: 1 / span 2;
   min-height: 320px;
 }
+
+.fixed-button {
+  position: fixed;
+  z-index: 1200;
+  bottom: 40px;
+  right: 40px;
+}
+
+.fixed-tools-button.MuiButton-root {
+  border-radius: 999px;
+  min-width: 96px;
+  height: 46px;
+  padding-inline: 16px;
+  text-transform: none;
+  font-weight: 700;
+  background: var(--special);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.fixed-tools-button.MuiButton-root:hover {
+  opacity: 0.9;
+}
+
+.tools-modal {
+  width: min(520px, calc(100vw - 24px));
+  max-height: min(86vh, 740px);
+  overflow: auto;
+  border-radius: 20px;
+  border: 1px solid var(--accent-border);
+  background: var(--white);
+  color: var(--black);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tools-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tools-modal-title {
+  margin: 0;
+  text-align: left;
+  font-size: 1.2rem;
+}
+
+.tools-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tools-section-title {
+  margin: 0;
+  text-align: left;
+  font-size: 1rem;
+}
+
+.tools-section-note {
+  margin: 0;
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--wbg);
+}
+
+.tools-calc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tools-calc-result {
+  margin: 0;
+  text-align: left;
+  /* font-weight: 700; */
+  color: var(--black);
+}
+
+.tools-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.tools-link {
+  color: var(--special);
+  text-decoration: none;
+}
+
+.tools-link:hover {
+  text-decoration: underline;
+}
+
+
+
+
+
+
+
 
 @media (max-width: 1024px) {
   .dashboard-layout {
@@ -1081,6 +1198,20 @@
     width: 220px;
     min-width: 220px;
   }
+
+  .fixed-button {
+    bottom: 14px;
+    right: 14px;
+  }
+
+  .fixed-tools-button.MuiButton-root {
+    min-width: 88px;
+    height: 42px;
+  }
+
+  .tools-calc-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 425px) {
@@ -1146,7 +1277,7 @@
   }
 }
 
-@media (prefers-color-scheme: light) {
+/* @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) .user-title {
     color: var(--text);
   }
@@ -1251,7 +1382,7 @@
 
 :root[data-theme='light'] .goal-gauge-label {
   color: var(--text);
-}
+} */
 
 
 ::-webkit-scrollbar {
