@@ -1217,10 +1217,12 @@ function App() {
   const [isToolsModalOpen, setIsToolsModalOpen] = useState(false)
   const [calcBudgetInput, setCalcBudgetInput] = useState('')
   const [calcStockPriceInput, setCalcStockPriceInput] = useState('')
+  const [calcQuantityInput, setCalcQuantityInput] = useState('')
   const [calcSelectedSymbol, setCalcSelectedSymbol] = useState<string | null>(null)
   const userSymbolsReadyForIdRef = useRef<string | null>(null)
   const notificationRegistrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const excelFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [calculatorType, setCalculatorType] = useState<'buy' | 'sell'>('buy')
 
   const isConfigValid = Boolean(
     (import.meta.env.VITE_PUBLIC_SUPABASE_URL?.trim() || import.meta.env.VITE_SUPABASE_URL?.trim()) &&
@@ -4262,6 +4264,32 @@ function App() {
     ? convertAmount(selectedLivePriceUsd, 'USD', selectedCurrency, currencyRates)
     : Number.NaN
 
+  const handleCalculatorSymbolChange = (_event: unknown, value: string | null) => {
+    setCalcSelectedSymbol(value)
+
+    if (!value) {
+      return
+    }
+
+    const quote = liveQuotes[value]
+    const quotePriceUsd = resolveLiveQuotePrice(quote)
+
+    if (Number.isFinite(quotePriceUsd)) {
+      const convertedPrice = convertAmount(quotePriceUsd, 'USD', selectedCurrency, currencyRates)
+
+      if (Number.isFinite(convertedPrice)) {
+        setCalcStockPriceInput(convertedPrice.toFixed(2))
+      }
+    }
+
+    if (calculatorType === 'sell') {
+      const holding = holdings.find((item) => item.symbol === value)
+      if (holding) {
+        setCalcQuantityInput(holding.quantity.toFixed(2))
+      }
+    }
+  }
+
   const handleOpenToolsModal = () => {
     if (!calcBudgetInput && Number.isFinite(latestMoneyIHave)) {
       setCalcBudgetInput(latestMoneyIHave.toFixed(2))
@@ -4270,17 +4298,101 @@ function App() {
     setIsToolsModalOpen(true)
   }
 
+  const calculatorSymbolOptions = calculatorType === 'sell' ? requiredHoldingSymbols : liveSymbols
+
+  const selectedCalcHolding = useMemo(() => {
+    if (!calcSelectedSymbol) {
+      return null
+    }
+
+    return holdings.find((holding) => holding.symbol === calcSelectedSymbol) ?? null
+  }, [holdings, calcSelectedSymbol])
+
+  useEffect(() => {
+    if (calculatorType !== 'sell') {
+      return
+    }
+
+    if (!calcSelectedSymbol) {
+      return
+    }
+
+    const holding = holdings.find((item) => item.symbol === calcSelectedSymbol)
+    if (!holding) {
+      setCalcSelectedSymbol(null)
+      setCalcQuantityInput('')
+      return
+    }
+
+    if (!calcQuantityInput) {
+      setCalcQuantityInput(holding.quantity.toFixed(2))
+    }
+  }, [calculatorType, calcSelectedSymbol, calcQuantityInput, holdings])
+
   const calcBudget = Number(calcBudgetInput)
   const calcStockPrice = Number(calcStockPriceInput)
+  const calcQuantity = Number(calcQuantityInput)
+  const selectedCalcHoldingPrice = selectedCalcHolding
+    ? convertAmount(selectedCalcHolding.avgBuyPriceUsd, 'USD', selectedCurrency, currencyRates)
+    : Number.NaN
+
   const canCalculateBuyCount =
+    calculatorType === 'buy' &&
     Number.isFinite(calcBudget) &&
     Number.isFinite(calcStockPrice) &&
     calcBudget > 0 &&
     calcStockPrice > 0
+
   const maxBuyShares = canCalculateBuyCount ? Math.floor(calcBudget / calcStockPrice) : 0
   const remainingMoney = canCalculateBuyCount
     ? Number((calcBudget - maxBuyShares * calcStockPrice).toFixed(2))
     : 0
+
+  const calcSellHoldingQuantity = selectedCalcHolding?.quantity ?? 0
+  const isSellQuantityValid =
+    calculatorType === 'sell' &&
+    Number.isFinite(calcStockPrice) &&
+    Number.isFinite(calcQuantity) &&
+    calcStockPrice > 0 &&
+    calcQuantity > 0 &&
+    Boolean(selectedCalcHolding) &&
+    calcQuantity <= calcSellHoldingQuantity
+
+  const sellGainLoss = isSellQuantityValid
+    ? Number(((calcStockPrice - selectedCalcHoldingPrice) * calcQuantity).toFixed(2))
+    : 0
+  const sellGainLossPercent = isSellQuantityValid && selectedCalcHoldingPrice > 0
+    ? Number((((calcStockPrice - selectedCalcHoldingPrice) / selectedCalcHoldingPrice) * 100).toFixed(2))
+    : 0
+  const sellGainLossAbs = Math.abs(sellGainLoss)
+
+  const sellStatusMessage = (() => {
+    if (calculatorType !== 'sell') {
+      return null
+    }
+
+    if (!calcSelectedSymbol) {
+      return 'Select a stock you currently hold to calculate realized gain or loss.'
+    }
+
+    if (!selectedCalcHolding) {
+      return `No holding record found for ${calcSelectedSymbol}.`
+    }
+
+    if (!Number.isFinite(calcStockPrice) || calcStockPrice <= 0) {
+      return 'Enter a valid sell price.'
+    }
+
+    if (!Number.isFinite(calcQuantity) || calcQuantity <= 0) {
+      return 'Enter a valid quantity to sell.'
+    }
+
+    if (calcQuantity > calcSellHoldingQuantity) {
+      return `Quantity exceeds your current holding of ${calcSellHoldingQuantity.toFixed(2)} shares.`
+    }
+
+    return null
+  })()
 
   return (
     <main className="page">
@@ -4551,83 +4663,151 @@ function App() {
         }}
       >
         <Box className="tools-modal">
-            <h1 className="sheet-title-box text-black">Extra Functions</h1>
+            {/* <h1 className="sheet-title-box text-black">Extra Functions</h1> */}
             {/* <Button variant="text" className="live-unfollow-button" onClick={() => setIsToolsModalOpen(false)}>
               <MdCancel size={20} />
             </Button> */}
 
           <Box className="tools-section">
-            <h3 className="tools-section-title">Stock Buy Calculator</h3>
-            {/* <p className="tools-section-note">Estimate how many shares you can buy with your Money I Have balance.</p> */}
-
-            <Box className="tools-calc-grid">
-              <TextField
-                type="number"
-                label={`Money Available (Money I Have, ${selectedCurrency})`}
-                value={calcBudgetInput}
-                onChange={(event) => setCalcBudgetInput(event.target.value)}
-                inputProps={{ min: '0', step: '0.01' }}
-                size="small"
-                variant="standard" 
-              />
-              <Autocomplete
-                options={liveSymbols}
-                value={calcSelectedSymbol}
-                onChange={(_event, value) => {
-                  setCalcSelectedSymbol(value)
-
-                  if (value) {
-                    const quote = liveQuotes[value]
-                    const quotePriceUsd = resolveLiveQuotePrice(quote)
-
-                    if (Number.isFinite(quotePriceUsd)) {
-                      const convertedPrice = convertAmount(
-                        quotePriceUsd,
-                        'USD',
-                        selectedCurrency,
-                        currencyRates,
-                      )
-
-                      if (Number.isFinite(convertedPrice)) {
-                        setCalcStockPriceInput(convertedPrice.toFixed(2))
-                      }
-                    }
-                  }
-                }}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Live Symbol (optional)"
-                    size="small"
-                    variant="standard" 
-                  />
-                )}
-              />
-              <TextField
-                type="number"
-                label={`Stock Price (manual or live, ${selectedCurrency})`}
-                value={calcStockPriceInput}
-                onChange={(event) => setCalcStockPriceInput(event.target.value)}
-                inputProps={{ min: '0', step: '0.01' }}
-                size="small"
-                variant="standard" 
-              />
+            <Box
+              className="tools-section-header"
+              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
+            >
+              <h3 className="tools-section-title">
+                {calculatorType === 'buy' ? 'Stock Buy Calculator' : 'Stock Sell Calculator'}
+              </h3>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {/* <p className="tools-section-note" style={{ margin: 0 }}>Buy</p> */}
+                <Switch
+                  checked={calculatorType === 'buy'}
+                  onChange={(event) => setCalculatorType(event.target.checked ? 'buy' : 'sell')}
+                />
+                {/* <p className="tools-section-note" style={{ margin: 0 }}>Sell</p> */}
+              </Box>
             </Box>
 
-            {calcSelectedSymbol ? (
-              <p className="tools-section-note">
-                {Number.isFinite(selectedLivePrice)
-                  ? `Live price for ${calcSelectedSymbol}: ${formatCurrency(selectedLivePrice, selectedCurrency)} (auto-filled)`
-                  : `No live quote available now for ${calcSelectedSymbol}. You can still type price manually.`}
-              </p>
-            ) : null}
+            <Box className="tools-calc-grid">
+              {calculatorType === 'buy' ? (
+                <TextField
+                  type="number"
+                  label={`Money Available (Money I Have, ${selectedCurrency})`}
+                  value={calcBudgetInput}
+                  onChange={(event) => setCalcBudgetInput(event.target.value)}
+                  inputProps={{ min: '0', step: '0.01' }}
+                  size="small"
+                  variant="standard"
+                />
+              ) : (
+                <Autocomplete
+                  options={calculatorSymbolOptions}
+                  value={calcSelectedSymbol}
+                  onChange={handleCalculatorSymbolChange}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Stock to sell"
+                      size="small"
+                      variant="standard"
+                    />
+                  )}
+                />
+              )}
 
-            {canCalculateBuyCount ? (
+              {calculatorType === 'buy' ? (
+                <Autocomplete
+                  options={calculatorSymbolOptions}
+                  value={calcSelectedSymbol}
+                  onChange={handleCalculatorSymbolChange}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Live Symbol (optional)"
+                      size="small"
+                      variant="standard"
+                    />
+                  )}
+                />
+              ) : (
+                <TextField
+                  type="number"
+                  label={`Sell Price (${selectedCurrency})`}
+                  value={calcStockPriceInput}
+                  onChange={(event) => setCalcStockPriceInput(event.target.value)}
+                  inputProps={{ min: '0', step: '0.01' }}
+                  size="small"
+                  variant="standard"
+                />
+              )}
+
+              {calculatorType === 'buy' ? (
+                <TextField
+                  type="number"
+                  label={`Stock Price (manual or live, ${selectedCurrency})`}
+                  value={calcStockPriceInput}
+                  onChange={(event) => setCalcStockPriceInput(event.target.value)}
+                  inputProps={{ min: '0', step: '0.01' }}
+                  size="small"
+                  variant="standard"
+                />
+              ) : (
+                <TextField
+                  type="number"
+                  label="Quantity to sell"
+                  value={calcQuantityInput}
+                  onChange={(event) => setCalcQuantityInput(event.target.value)}
+                  inputProps={{ min: '0', step: '0.01' }}
+                  size="small"
+                  variant="standard"
+                  sx={{ gridColumn: '1 / -1' }}
+                />
+              )}
+            </Box>
+
+            {calculatorType === 'buy' ? (
+              calcSelectedSymbol ? (
+                <p className="tools-section-note">
+                  {Number.isFinite(selectedLivePrice)
+                    ? `Live price for ${calcSelectedSymbol}: ${formatCurrency(selectedLivePrice, selectedCurrency)} (auto-filled)`
+                    : `No live quote available now for ${calcSelectedSymbol}. You can still type price manually.`}
+                </p>
+              ) : null
+            ) : (
+              <>
+                {calcSelectedSymbol ? (
+                  <p className="tools-section-note">
+                    {Number.isFinite(selectedLivePrice)
+                      ? `Live price for ${calcSelectedSymbol}: ${formatCurrency(selectedLivePrice, selectedCurrency)} (auto-filled)`
+                      : `No live quote available now for ${calcSelectedSymbol}. You can still type price manually.`}
+                  </p>
+                ) : null}
+                {selectedCalcHolding ? (
+                  <p className="tools-section-note">
+                    Holding average buy price: {formatCurrency(selectedCalcHoldingPrice, selectedCurrency)} | Available quantity: {selectedCalcHolding.quantity.toFixed(2)}
+                  </p>
+                ) : null}
+              </>
+            )}
+
+            {calculatorType === 'buy' ? (
+              canCalculateBuyCount ? (
+                <p className="tools-calc-result">
+                  You can buy <span style={{ fontWeight: 700, color: 'var(--special)' }}>{maxBuyShares}</span> share{maxBuyShares === 1 ? '' : 's'} and keep <span style={{ fontWeight: 700, color: 'var(--special)' }}>{formatCurrency(remainingMoney, selectedCurrency)}</span> remaining.
+                </p>
+              ) : (
+                <p className="tools-calc-result">Enter valid values above to calculate your buy count.</p>
+              )
+            ) : sellStatusMessage ? (
+              <p className="tools-calc-result">{sellStatusMessage}</p>
+            ) : isSellQuantityValid ? (
               <p className="tools-calc-result">
-                You can buy <span style={{ fontWeight: 700, color: 'var(--special)' }}>{maxBuyShares}</span> share{maxBuyShares === 1 ? '' : 's'} and keep <span style={{ fontWeight: 700, color: 'var(--special)' }}>{formatCurrency(remainingMoney, selectedCurrency)}</span> remaining.
+                You would {sellGainLoss >= 0 ? 'gain' : 'lose'}{' '}
+                <span style={{ fontWeight: 700, color: 'var(--special)' }}>
+                  {formatCurrency(sellGainLossAbs, selectedCurrency)}
+                </span>{' '}
+                on this sale{sellGainLoss !== 0 ? ` (${sellGainLossPercent >= 0 ? '+' : ''}${formatPercent(sellGainLossPercent)})` : ''}.
               </p>
             ) : (
-              <p className="tools-calc-result">Enter valid values above to calculate your buy count.</p>
+              <p className="tools-calc-result">Select a holding, enter a sell price, and enter a quantity to calculate gain or loss.</p>
             )}
           </Box>
 
