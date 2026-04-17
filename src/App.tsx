@@ -16,6 +16,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Autocomplete from '@mui/material/Autocomplete'
 import Divider from '@mui/material/Divider'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import type { Session } from '@supabase/supabase-js'
 import {
   enrichStocksWithProfitLoss,
@@ -35,7 +36,9 @@ import {
   MdLightMode,
   MdCancel,
   MdEdit,
-  MdQueryStats
+  MdQueryStats,
+  MdArrowLeft,
+  MdArrowRight,
 } from 'react-icons/md'
 import { LineChart } from '@mui/x-charts/LineChart'
 import { PieChart } from '@mui/x-charts/PieChart'
@@ -55,6 +58,7 @@ import {
   type SheetDataWithIds,
 } from './supabaseData'
 import { downloadExcelTemplate, parseExcelFile, excelRowToObject, type ExcelDataRow } from './excelData'
+import { formatDateDDMMYYYY, formatDateTimeLocalValue, parseDateValue } from './dateUtils'
 import './App.css'
 
 const CURRENCY_OPTIONS = ['USD', 'HKD'] as const
@@ -186,6 +190,29 @@ type GoalPeriodMetrics = {
   earnPercent: number
   avgEarnPercent: number
   tradeCount: number
+}
+
+type DailyChangeEntry = {
+  moneyChange: number
+  percentChange: number | null
+  tradeCount: number
+  records: Array<{ moneyChange: number; percentChange: number | null }>
+}
+
+type CalendarViewMode = 'day' | 'month'
+
+type CalendarSummary = {
+  totalMoneyChange: number
+  totalPercentChange: number | null
+  totalTradeCount: number
+}
+
+function getDailyChangeToneClass(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) {
+    return 'daily-calendar-value-neutral'
+  }
+
+  return value > 0 ? 'daily-calendar-value-positive' : 'daily-calendar-value-negative'
 }
 
 const ADD_TABLE_OPTIONS: AddTableName[] = ['Stocks', 'Dividend', 'Money Move']
@@ -330,11 +357,18 @@ function getDefaultFormValues(table: AddTableName): Record<string, string> {
 }
 
 function normalizeHeader(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return value
+    .toLowerCase()
+    .replace(/%/g, 'percent')
+    .replace(/[^a-z0-9]/g, '')
 }
 
 function findColumnIndex(headers: string[], keys: string[]): number {
-  const normalizedKeys = keys.map((key) => normalizeHeader(key))
+  const normalizedKeys = keys.map((key) => normalizeHeader(key)).filter((key) => key.length > 0)
+
+  if (normalizedKeys.length === 0) {
+    return -1
+  }
 
   return headers.findIndex((header) => {
     const normalizedHeader = normalizeHeader(header)
@@ -352,6 +386,28 @@ function formatCurrency(value: number, currency: CurrencyCode): string {
 
 function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`
+}
+
+function formatSignedMoney(value: number): string {
+  const absoluteValue = Math.abs(value)
+  const formattedAbs = absoluteValue >= 1000 ? String(Math.trunc(absoluteValue)) : absoluteValue.toFixed(2)
+
+  if (value > 0) {
+    return `+${formattedAbs}`
+  }
+
+  if (value < 0) {
+    return `-${formattedAbs}`
+  }
+
+  return absoluteValue >= 1000 ? '0' : '0.00'
+}
+
+function formatSignedPercent(value: number): string {
+  const absoluteValue = Math.abs(value)
+  const formattedAbs = absoluteValue >= 1000 ? String(Math.trunc(absoluteValue)) : absoluteValue.toFixed(1)
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}${formattedAbs}%`
 }
 
 function resolveMoneyMoveType(value: string): 'in' | 'bor' | 'back' | 'out' | null {
@@ -418,38 +474,86 @@ function resolveCurrencyCode(value: string | undefined): CurrencyCode {
   return normalized === 'HKD' ? 'HKD' : 'USD'
 }
 
-function parseDateValue(raw: string): Date | null {
-  const trimmed = raw.trim()
-  if (!trimmed) {
+function shiftMonthKey(monthKey: string, monthOffset: number): string | null {
+  const matched = monthKey.match(/^(\d{4})-(\d{2})$/)
+  if (!matched) {
     return null
   }
 
-  const googleDateMatch = trimmed.match(
-    /^Date\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(\d+),\s*(\d+),\s*(\d+))?\)$/i,
-  )
-  if (googleDateMatch) {
-    const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw] = googleDateMatch
-    const year = Number(yearRaw)
-    // Google Charts Date(...) month is already zero-based.
-    const month = Number(monthRaw)
-    const day = Number(dayRaw)
-    const hour = hourRaw ? Number(hourRaw) : 0
-    const minute = minuteRaw ? Number(minuteRaw) : 0
-    const second = secondRaw ? Number(secondRaw) : 0
-
-    const parsedGoogleDate = new Date(year, month, day, hour, minute, second)
-    return Number.isNaN(parsedGoogleDate.getTime()) ? null : parsedGoogleDate
-  }
-
-  const normalized = trimmed.replace(/\./g, '-').replace(/\//g, '-')
-  const parsed = new Date(normalized)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
+  const year = Number(matched[1])
+  const monthIndex = Number(matched[2]) - 1
+  const date = new Date(year, monthIndex + monthOffset, 1)
+  return toMonthKey(date)
 }
 
 function toMonthKey(date: Date): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
   return `${year}-${month}`
+}
+
+function toDayKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+
+function formatCalendarMonthLabel(monthKey: string): string {
+  const matched = monthKey.match(/^(\d{4})-(\d{2})$/)
+  if (!matched) {
+    return monthKey
+  }
+
+  const year = Number(matched[1])
+  const monthIndex = Number(matched[2]) - 1
+  const date = new Date(year, monthIndex, 1)
+
+  return date.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+function formatCalendarMonthShortLabel(monthKey: string): string {
+  const matched = monthKey.match(/^(\d{4})-(\d{2})$/)
+  if (!matched) {
+    return monthKey
+  }
+
+  const year = Number(matched[1])
+  const monthIndex = Number(matched[2]) - 1
+  const date = new Date(year, monthIndex, 1)
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+  })
+}
+
+function summarizeCalendarEntries(entries: Iterable<DailyChangeEntry>): CalendarSummary {
+  let totalMoneyChange = 0
+  let totalPercentChange = 0
+  let totalPercentCount = 0
+  let totalTradeCount = 0
+
+  for (const entry of entries) {
+    totalMoneyChange += entry.moneyChange
+    totalTradeCount += entry.tradeCount
+
+    entry.records.forEach((record) => {
+      if (record.percentChange !== null && Number.isFinite(record.percentChange)) {
+        totalPercentChange += record.percentChange
+        totalPercentCount += 1
+      }
+    })
+  }
+
+  return {
+    totalMoneyChange: Number(totalMoneyChange.toFixed(2)),
+    totalPercentChange: totalPercentCount > 0 ? Number(totalPercentChange.toFixed(2)) : null,
+    totalTradeCount,
+  }
 }
 
 function formatMonthLabel(monthKey: string): string {
@@ -460,13 +564,6 @@ function formatMonthLabel(monthKey: string): string {
 
   const [, year, month] = matched
   return `${month}/${year.slice(-2)}`
-}
-
-function formatDateDDMMYYYY(date: Date): string {
-  const day = String(date.getDate()).padStart(2, '0')
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const year = date.getFullYear()
-  return `${day}/${month}/${year}`
 }
 
 function formatTimelineLabel(date: Date, index: number): string {
@@ -869,8 +966,8 @@ function parseGoalDeadlineLabel(deadline: string): string {
     return 'No deadline'
   }
 
-  const parsed = new Date(deadline)
-  return Number.isNaN(parsed.getTime()) ? deadline : formatDateDDMMYYYY(parsed)
+  const parsed = parseDateValue(deadline)
+  return parsed ? formatDateDDMMYYYY(parsed) : deadline
 }
 
 function getGoalScheduleLabel(goal: GoalRecord): string {
@@ -1214,6 +1311,8 @@ function App() {
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false)
   const [viewingGoalIdMain, setViewingGoalIdMain] = useState<string | null>(null)
   const [showGoalTimelineAsPercent, setShowGoalTimelineAsPercent] = useState(true)
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('day')
+  const [selectedDailyCalendarMonth, setSelectedDailyCalendarMonth] = useState('')
   const [isToolsModalOpen, setIsToolsModalOpen] = useState(false)
   const [calcBudgetInput, setCalcBudgetInput] = useState('')
   const [calcStockPriceInput, setCalcStockPriceInput] = useState('')
@@ -1290,8 +1389,8 @@ function App() {
     }
 
     try {
-      const parsed = new Date(value.trim())
-      if (!Number.isNaN(parsed.getTime())) {
+      const parsed = parseDateValue(value)
+      if (parsed) {
         return parsed.toLocaleString()
       }
     } catch (err) {
@@ -1803,7 +1902,7 @@ function App() {
       if (key === 'time' || key === 'date') {
         const parsed = parseDateValue(value)
         if (parsed) {
-          formValues['time'] = parsed.toISOString().slice(0, 16)
+          formValues['time'] = formatDateTimeLocalValue(parsed)
         }
       } else if (key === 'action' && table === 'Money Move') {
         formValues['do'] = value
@@ -3845,6 +3944,308 @@ function App() {
     return { labels, values }
   }, [stocksData, displayStocksData, dividendData, selectedCurrency, currencyRates])
 
+  const dailyChangeCalendar = useMemo(() => {
+    const stocksDateIndex = findColumnIndex(stocksData.headers, ['date', 'time'])
+    const stocksCurrencyIndex = findColumnIndex(stocksData.headers, ['currency'])
+    const profitLossIndex = findColumnIndex(displayStocksData.headers, ['profitloss'])
+    const percentIndex = findColumnIndex(displayStocksData.headers, ['%'])
+
+    const byDay = new Map<
+      string,
+      {
+        moneyChange: number
+        percentSum: number
+        percentCount: number
+        tradeCount: number
+        records: Array<{ moneyChange: number; percentChange: number | null }>
+      }
+    >()
+
+    if (stocksDateIndex === -1 || (profitLossIndex === -1 && percentIndex === -1)) {
+      return {
+        monthKeys: [] as string[],
+        entriesByDayByMonth: new Map<string, Map<number, DailyChangeEntry>>(),
+      }
+    }
+
+    displayStocksData.rows.forEach((row, rowIndex) => {
+      const date = parseDateValue(stocksData.rows[rowIndex]?.[stocksDateIndex] ?? '')
+      if (!date) {
+        return
+      }
+
+      const dayKey = toDayKey(date)
+      const current = byDay.get(dayKey) ?? {
+        moneyChange: 0,
+        percentSum: 0,
+        percentCount: 0,
+        tradeCount: 0,
+        records: [] as Array<{ moneyChange: number; percentChange: number | null }>,
+      }
+
+      let rowMoneyChange: number | null = null
+      let rowPercentChange: number | null = null
+
+      if (profitLossIndex !== -1) {
+        const profitLoss = parseNumber(row[profitLossIndex] ?? '')
+        if (Number.isFinite(profitLoss)) {
+          const rowCurrency = resolveCurrencyCode(stocksData.rows[rowIndex]?.[stocksCurrencyIndex] ?? '')
+          const normalizedMoneyChange = convertAmount(
+            profitLoss,
+            rowCurrency,
+            selectedCurrency,
+            currencyRates,
+          )
+          current.moneyChange += normalizedMoneyChange
+          current.tradeCount += 1
+          rowMoneyChange = normalizedMoneyChange
+        }
+      }
+
+      if (percentIndex !== -1) {
+        const percentage = parseNumber(row[percentIndex] ?? '')
+        if (Number.isFinite(percentage)) {
+          current.percentSum += percentage
+          current.percentCount += 1
+          rowPercentChange = percentage
+        }
+      }
+
+      if (rowMoneyChange !== null || rowPercentChange !== null) {
+        current.records.push({
+          moneyChange: Number((rowMoneyChange ?? 0).toFixed(2)),
+          percentChange: rowPercentChange !== null ? Number(rowPercentChange.toFixed(2)) : null,
+        })
+      }
+
+      byDay.set(dayKey, current)
+    })
+
+    const entriesByDayByMonth = new Map<string, Map<number, DailyChangeEntry>>()
+
+    Array.from(byDay.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([dayKey, value]) => {
+        const matched = dayKey.match(/^(\d{4}-\d{2})-(\d{2})$/)
+        if (!matched) {
+          return
+        }
+
+        const monthKey = matched[1]
+        const day = Number(matched[2])
+        const monthMap = entriesByDayByMonth.get(monthKey) ?? new Map<number, DailyChangeEntry>()
+
+        monthMap.set(day, {
+          moneyChange: Number(value.moneyChange.toFixed(2)),
+          percentChange:
+            value.percentCount > 0 ? Number((value.percentSum / value.percentCount).toFixed(2)) : null,
+          tradeCount: value.tradeCount,
+          records: value.records,
+        })
+
+        entriesByDayByMonth.set(monthKey, monthMap)
+      })
+
+    const monthKeys = Array.from(entriesByDayByMonth.keys()).sort((a, b) => a.localeCompare(b))
+
+    return { monthKeys, entriesByDayByMonth }
+  }, [stocksData, displayStocksData, selectedCurrency, currencyRates])
+
+  const selectedCalendarAnchorMonthKey = useMemo(() => {
+    if (selectedDailyCalendarMonth) {
+      return selectedDailyCalendarMonth
+    }
+
+    return dailyChangeCalendar.monthKeys[dailyChangeCalendar.monthKeys.length - 1] ?? ''
+  }, [dailyChangeCalendar.monthKeys, selectedDailyCalendarMonth])
+
+  const selectedCalendarYear = selectedCalendarAnchorMonthKey
+    ? Number(selectedCalendarAnchorMonthKey.slice(0, 4))
+    : new Date().getFullYear()
+
+  useEffect(() => {
+    if (dailyChangeCalendar.monthKeys.length === 0) {
+      if (selectedDailyCalendarMonth) {
+        setSelectedDailyCalendarMonth('')
+      }
+      return
+    }
+
+    const latestMonthKey = dailyChangeCalendar.monthKeys[dailyChangeCalendar.monthKeys.length - 1]
+    if (!selectedDailyCalendarMonth) {
+      setSelectedDailyCalendarMonth(latestMonthKey)
+      return
+    }
+
+    if (calendarViewMode === 'day' && !dailyChangeCalendar.monthKeys.includes(selectedDailyCalendarMonth)) {
+      setSelectedDailyCalendarMonth(latestMonthKey)
+    }
+  }, [calendarViewMode, dailyChangeCalendar.monthKeys, selectedDailyCalendarMonth])
+
+  const calendarMonthSummaries = useMemo(() => {
+    const monthSummaries = new Map<string, CalendarSummary>()
+
+    dailyChangeCalendar.entriesByDayByMonth.forEach((monthEntries, monthKey) => {
+      monthSummaries.set(monthKey, summarizeCalendarEntries(monthEntries.values()))
+    })
+
+    return monthSummaries
+  }, [dailyChangeCalendar.entriesByDayByMonth])
+
+  const selectedCalendarSummary = useMemo(() => {
+    if (!selectedCalendarAnchorMonthKey) {
+      return {
+        totalMoneyChange: 0,
+        totalPercentChange: null as number | null,
+        totalTradeCount: 0,
+      }
+    }
+
+    if (calendarViewMode === 'day') {
+      return calendarMonthSummaries.get(selectedCalendarAnchorMonthKey) ?? {
+        totalMoneyChange: 0,
+        totalPercentChange: null,
+        totalTradeCount: 0,
+      }
+    }
+
+    let yearTotalMoneyChange = 0
+    let yearTotalPercentChange = 0
+    let yearTotalPercentCount = 0
+    let yearTotalTradeCount = 0
+
+    dailyChangeCalendar.entriesByDayByMonth.forEach((monthEntries, monthKey) => {
+      if (Number(monthKey.slice(0, 4)) !== selectedCalendarYear) {
+        return
+      }
+
+      monthEntries.forEach((entry) => {
+        yearTotalMoneyChange += entry.moneyChange
+        yearTotalTradeCount += entry.tradeCount
+        entry.records.forEach((record) => {
+          if (record.percentChange !== null && Number.isFinite(record.percentChange)) {
+            yearTotalPercentChange += record.percentChange
+            yearTotalPercentCount += 1
+          }
+        })
+      })
+    })
+
+    return {
+      totalMoneyChange: Number(yearTotalMoneyChange.toFixed(2)),
+      totalPercentChange: yearTotalPercentCount > 0 ? Number(yearTotalPercentChange.toFixed(2)) : null,
+      totalTradeCount: yearTotalTradeCount,
+    }
+  }, [calendarMonthSummaries, calendarViewMode, dailyChangeCalendar.entriesByDayByMonth, selectedCalendarAnchorMonthKey, selectedCalendarYear])
+
+  const calendarDayGrid = useMemo(() => {
+    if (!selectedCalendarAnchorMonthKey) {
+      return {
+        title: '',
+        weeks: [] as Array<Array<{ day: number | null; entry: DailyChangeEntry | null }>>,
+      }
+    }
+
+    const matched = selectedCalendarAnchorMonthKey.match(/^(\d{4})-(\d{2})$/)
+    if (!matched) {
+      return {
+        title: selectedCalendarAnchorMonthKey,
+        weeks: [] as Array<Array<{ day: number | null; entry: DailyChangeEntry | null }>>,
+      }
+    }
+
+    const year = Number(matched[1])
+    const monthIndex = Number(matched[2]) - 1
+    const firstDay = new Date(year, monthIndex, 1)
+    const daysInMonth = new Date(year, monthIndex + 1, 0).getDate()
+    const leadingBlankCount = firstDay.getDay()
+    const monthEntries = dailyChangeCalendar.entriesByDayByMonth.get(selectedCalendarAnchorMonthKey) ?? new Map<number, DailyChangeEntry>()
+
+    const cells: Array<{ day: number | null; entry: DailyChangeEntry | null }> = []
+
+    for (let i = 0; i < leadingBlankCount; i += 1) {
+      cells.push({ day: null, entry: null })
+    }
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      cells.push({ day, entry: monthEntries.get(day) ?? null })
+    }
+
+    while (cells.length % 7 !== 0) {
+      cells.push({ day: null, entry: null })
+    }
+
+    const weeks: Array<Array<{ day: number | null; entry: DailyChangeEntry | null }>> = []
+    for (let i = 0; i < cells.length; i += 7) {
+      weeks.push(cells.slice(i, i + 7))
+    }
+
+    return {
+      title: formatCalendarMonthLabel(selectedCalendarAnchorMonthKey),
+      weeks,
+    }
+  }, [dailyChangeCalendar.entriesByDayByMonth, selectedCalendarAnchorMonthKey])
+
+  const calendarMonthGrid = useMemo(() => {
+    const startMonthIndex = 0
+    const cells = Array.from({ length: 12 }, (_, index) => {
+      const monthKey = `${selectedCalendarYear}-${String(startMonthIndex + index + 1).padStart(2, '0')}`
+      return {
+        key: monthKey,
+        label: formatCalendarMonthShortLabel(monthKey),
+        summary: calendarMonthSummaries.get(monthKey) ?? null,
+      }
+    })
+
+    const rows: Array<Array<(typeof cells)[number]>> = []
+    for (let i = 0; i < cells.length; i += 3) {
+      rows.push(cells.slice(i, i + 3))
+    }
+
+    return {
+      title: String(selectedCalendarYear),
+      rows,
+    }
+  }, [calendarMonthSummaries, selectedCalendarYear])
+
+  const goToPreviousCalendarPeriod = () => {
+    if (!selectedCalendarAnchorMonthKey) {
+      return
+    }
+
+    if (calendarViewMode === 'day') {
+      const currentIndex = dailyChangeCalendar.monthKeys.indexOf(selectedCalendarAnchorMonthKey)
+      if (currentIndex > 0) {
+        setSelectedDailyCalendarMonth(dailyChangeCalendar.monthKeys[currentIndex - 1] ?? selectedCalendarAnchorMonthKey)
+      }
+      return
+    }
+
+    const nextMonthKey = shiftMonthKey(selectedCalendarAnchorMonthKey, -12)
+    if (nextMonthKey) {
+      setSelectedDailyCalendarMonth(nextMonthKey)
+    }
+  }
+
+  const goToNextCalendarPeriod = () => {
+    if (!selectedCalendarAnchorMonthKey) {
+      return
+    }
+
+    if (calendarViewMode === 'day') {
+      const currentIndex = dailyChangeCalendar.monthKeys.indexOf(selectedCalendarAnchorMonthKey)
+      if (currentIndex !== -1 && currentIndex < dailyChangeCalendar.monthKeys.length - 1) {
+        setSelectedDailyCalendarMonth(dailyChangeCalendar.monthKeys[currentIndex + 1] ?? selectedCalendarAnchorMonthKey)
+      }
+      return
+    }
+
+    const nextMonthKey = shiftMonthKey(selectedCalendarAnchorMonthKey, 12)
+    if (nextMonthKey) {
+      setSelectedDailyCalendarMonth(nextMonthKey)
+    }
+  }
+
   useEffect(() => {
     if (!isConfigValid) {
       setError(
@@ -5173,6 +5574,270 @@ function App() {
                       />
                     )}
                   </div>
+                </Box>
+
+                {/* <h1 className="sheet-title text-black">Calendar</h1> */}
+                <Box className="chart-card chart-card-daily-calendar">
+                  <Box className="daily-calendar-header">
+                    <Box className="daily-calendar-title-group">
+                      <Box
+                        className={`daily-calendar-month-summary`}
+                      >
+                        <p className="daily-calendar-month-summary-item">
+                          <span>Total:</span>
+                          <strong className={`${selectedCalendarSummary.totalMoneyChange > 0
+                              ? 'daily-calendar-month-summary-positive'
+                              : selectedCalendarSummary.totalMoneyChange < 0
+                                ? 'daily-calendar-month-summary-negative'
+                                : 'daily-calendar-month-summary-neutral'
+                            }`}>
+                            {formatSignedMoney(
+                              selectedCalendarSummary.totalMoneyChange,
+                            )}
+                          </strong>
+                        </p>
+                        <p className="daily-calendar-month-summary-item">
+                          <span>Total %:</span>
+                          <strong className={`${selectedCalendarSummary.totalPercentChange !== null
+                              ? selectedCalendarSummary.totalPercentChange > 0
+                                ? 'daily-calendar-month-summary-positive'
+                                : selectedCalendarSummary.totalPercentChange < 0
+                                  ? 'daily-calendar-month-summary-negative'
+                                  : 'daily-calendar-month-summary-neutral'
+                              : 'daily-calendar-month-summary-neutral'
+                            }`}>
+                            {selectedCalendarSummary.totalPercentChange !== null
+                              ? formatSignedPercent(selectedCalendarSummary.totalPercentChange)
+                              : '--'}
+                          </strong>
+                        </p>
+                      </Box>
+                    </Box>
+                    <Box className="daily-calendar-month-controls-switch">
+                      <ToggleButtonGroup
+                        exclusive
+                        size="small"
+                        value={calendarViewMode}
+                        onChange={(_, nextValue: CalendarViewMode | null) => {
+                          if (nextValue) {
+                            setCalendarViewMode(nextValue)
+                          }
+                        }}
+                        aria-label="Calendar view mode"
+                        // className='daily-calendar-month-group-button'
+                      >
+                        <ToggleButton value="day">Day</ToggleButton>
+                        <ToggleButton value="month">Month</ToggleButton>
+                      </ToggleButtonGroup>
+                    </Box>
+                  </Box>
+
+                  <Box className="daily-calendar-month-controls">
+                    <Button
+                      size="small"
+                      variant="text"
+                      sx={{
+                        width: 40,
+                        minWidth: 40,
+                        height: 40,
+                        padding: 0,
+                        borderRadius: '50%',
+                        backgroundColor: '#fff',
+                        color: 'var(--special)',
+                        borderColor: 'var(--special)',
+                        '&.MuiButton-contained': {
+                          backgroundColor: 'var(--special)',
+                          color: 'var(--text)',
+                          '&:hover': {
+                            borderColor: 'var(--accent)',
+                            opacity: 0.92,
+                          },
+                        },
+                      }}
+                      onClick={goToPreviousCalendarPeriod}
+                      disabled={!selectedCalendarAnchorMonthKey || (calendarViewMode === 'day' && dailyChangeCalendar.monthKeys.indexOf(selectedCalendarAnchorMonthKey) <= 0)}
+                    >
+                      <MdArrowLeft size={30} />
+                    </Button>
+                    <p className="daily-calendar-month-label">
+                      {calendarViewMode === 'day'
+                        ? calendarDayGrid.title || 'No data'
+                        : calendarMonthGrid.title}
+                    </p>
+                    <Button
+                      size="small"
+                      variant="text"
+                      sx={{
+                        width: 40,
+                        minWidth: 40,
+                        height: 40,
+                        padding: 0,
+                        borderRadius: '50%',
+                        backgroundColor: '#fff',
+                        color: 'var(--special)',
+                        borderColor: 'var(--special)',
+                        '&.MuiButton-contained': {
+                          backgroundColor: 'var(--special)',
+                          color: 'var(--text)',
+                          '&:hover': {
+                            borderColor: 'var(--accent)',
+                            opacity: 0.92,
+                          },
+                        },
+                      }}
+                      onClick={goToNextCalendarPeriod}
+                      disabled={
+                        !selectedCalendarAnchorMonthKey ||
+                        (calendarViewMode === 'day' &&
+                          dailyChangeCalendar.monthKeys.indexOf(selectedCalendarAnchorMonthKey) >= dailyChangeCalendar.monthKeys.length - 1)
+                      }
+                    >
+                      <MdArrowRight size={30} />
+                    </Button>
+                    </Box>
+
+                  {calendarViewMode === 'day' ? (
+                    calendarDayGrid.weeks.length === 0 ? (
+                      <p className="chart-empty">No daily trade records available yet.</p>
+                    ) : (
+                      <Box className="daily-calendar-grid-wrap">
+                        <Box className="daily-calendar-weekday-row" role="row">
+                          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((weekday) => (
+                            <p key={weekday} className="daily-calendar-weekday" role="columnheader">
+                              {weekday}
+                            </p>
+                          ))}
+                        </Box>
+
+                        <Box className="daily-calendar-grid" role="table" aria-label="Daily money and percent change calendar">
+                          {calendarDayGrid.weeks.flatMap((week, weekIndex) =>
+                            week.map((cell, dayIndex) => {
+                              if (!cell.day) {
+                                return <Box key={`blank-${weekIndex}-${dayIndex}`} className="daily-calendar-cell daily-calendar-cell-blank" />
+                              }
+
+                              const toneClass =
+                                !cell.entry || cell.entry.moneyChange === 0
+                                  ? 'daily-calendar-cell-neutral'
+                                  : cell.entry.moneyChange > 0
+                                    ? 'daily-calendar-cell-positive'
+                                    : 'daily-calendar-cell-negative'
+
+                              return (
+                                <Tooltip
+                                  key={`${selectedCalendarAnchorMonthKey}-${cell.day}`}
+                                  arrow
+                                  placement="bottom"
+                                  title={
+                                    cell.entry && cell.entry.records.length > 0 ? (
+                                      <Box className="daily-record-tooltip">
+                                        {cell.entry.records.map((record, recordIndex) => (
+                                          <p key={`${cell.day}-record-${recordIndex}`} className="daily-record-tooltip-line">
+                                            {formatSignedMoney(record.moneyChange)} |{' '}
+                                            {record.percentChange !== null
+                                              ? formatSignedPercent(record.percentChange)
+                                              : '--'}
+                                          </p>
+                                        ))}
+                                      </Box>
+                                    ) : (
+                                      'No records'
+                                    )
+                                  }
+                                >
+                                  <Box className={`daily-calendar-cell ${toneClass}`}>
+                                    <p className="daily-calendar-day">{cell.day}</p>
+                                    <p
+                                      className={`daily-calendar-money ${
+                                        cell.entry ? getDailyChangeToneClass(cell.entry.moneyChange) : 'daily-calendar-value-neutral'
+                                      }`}
+                                    >
+                                      {cell.entry ? formatSignedMoney(cell.entry.moneyChange) : '--'}
+                                    </p>
+                                    <p
+                                      className={`daily-calendar-percent ${
+                                        cell.entry && cell.entry.percentChange !== null
+                                          ? getDailyChangeToneClass(cell.entry.percentChange)
+                                          : 'daily-calendar-value-neutral'
+                                      }`}
+                                    >
+                                      {cell.entry && cell.entry.percentChange !== null
+                                        ? formatSignedPercent(cell.entry.percentChange)
+                                        : '--'}
+                                    </p>
+                                  </Box>
+                                </Tooltip>
+                              )
+                            }),
+                          )}
+                        </Box>
+                      </Box>
+                    )
+                  ) : calendarViewMode === 'month' ? (
+                    <Box className="daily-calendar-grid-wrap">
+                      <Box
+                        className="daily-calendar-grid"
+                        role="table"
+                        aria-label="Monthly overview calendar"
+                        sx={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}
+                      >
+                        {calendarMonthGrid.rows.flatMap((row) =>
+                          row.map((cell) => {
+                            const summary = cell.summary
+                            const toneClass =
+                              !summary || summary.totalMoneyChange === 0
+                                ? 'daily-calendar-cell-neutral'
+                                : summary.totalMoneyChange > 0
+                                  ? 'daily-calendar-cell-positive'
+                                  : 'daily-calendar-cell-negative'
+
+                            return (
+                              <Tooltip
+                                key={cell.key}
+                                arrow
+                                placement="bottom"
+                                title={
+                                  summary ? (
+                                    <Box className="daily-record-tooltip">
+                                      <p className="daily-record-tooltip-line">Total: {formatSignedMoney(summary.totalMoneyChange)}</p>
+                                      <p className="daily-record-tooltip-line">
+                                        Total %: {summary.totalPercentChange !== null ? formatSignedPercent(summary.totalPercentChange) : '--'}
+                                      </p>
+                                      <p className="daily-record-tooltip-line">Trades: {summary.totalTradeCount}</p>
+                                    </Box>
+                                  ) : (
+                                    'No records'
+                                  )
+                                }
+                              >
+                                <Box className={`daily-calendar-cell ${toneClass}`}>
+                                  <p className="daily-calendar-day">{cell.label}</p>
+                                  <p
+                                    className={`daily-calendar-money ${
+                                      summary ? getDailyChangeToneClass(summary.totalMoneyChange) : 'daily-calendar-value-neutral'
+                                    }`}
+                                  >
+                                    {summary ? formatSignedMoney(summary.totalMoneyChange) : '--'}
+                                  </p>
+                                  <p
+                                    className={`daily-calendar-percent ${
+                                      summary && summary.totalPercentChange !== null
+                                        ? getDailyChangeToneClass(summary.totalPercentChange)
+                                        : 'daily-calendar-value-neutral'
+                                    }`}
+                                  >
+                                    {summary && summary.totalPercentChange !== null
+                                      ? formatSignedPercent(summary.totalPercentChange)
+                                      : '--'}
+                                  </p>
+                                </Box>
+                              </Tooltip>
+                            )
+                          }),
+                        )}
+                      </Box>
+                    </Box>
+                  ) : null}
                 </Box>
 
                 <Box className="sheet-section dashboard-holdings">

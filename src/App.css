@@ -322,6 +322,187 @@
   grid-column: 1 / -1;
 }
 
+.chart-card-daily-calendar {
+  grid-column: 1 / -1;
+}
+
+.daily-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.daily-calendar-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.daily-calendar-month-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 999px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+}
+
+.daily-calendar-month-summary-positive {
+  color: #166534;
+}
+
+.daily-calendar-month-summary-negative {
+  color: #b91c1c;
+}
+
+.daily-calendar-month-summary-neutral {
+  color: var(--black);
+}
+
+.daily-calendar-month-summary-item {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--black);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.daily-calendar-month-summary-item strong {
+  font-size: 0.82rem;
+}
+
+.daily-calendar-month-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.daily-calendar-month-label {
+  min-width: 150px;
+  margin: 0;
+  text-align: center;
+  color: var(--black);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.daily-calendar-grid-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  /* gap: 8px; */
+}
+
+.daily-calendar-weekday-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.daily-calendar-weekday {
+  margin: 0;
+  text-align: center;
+  color: var(--wbg);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.daily-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  /* gap: 8px; */
+}
+
+.daily-calendar-cell {
+  min-height: 82px;
+  border-radius: 12px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: default;
+}
+
+.daily-record-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.daily-record-tooltip-line {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+.daily-calendar-cell-blank {
+  background: transparent;
+  border-color: transparent;
+}
+
+.daily-calendar-cell-positive {
+  color: #166534;
+  /* border-color: #86efac; */
+}
+
+.daily-calendar-cell-negative {
+  color: #b91c1c;
+  /* border-color: #fca5a5; */
+}
+
+.daily-calendar-cell-neutral {
+  color: var(--black);
+  /* border-color: #cbd5e1; */
+}
+
+.daily-calendar-day {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--black);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.daily-calendar-money {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.daily-calendar-percent {
+  margin: 0;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.daily-calendar-value-positive {
+  color: #166534;
+}
+
+.daily-calendar-value-negative {
+  color: #b91c1c;
+}
+
+.daily-calendar-value-neutral {
+  color: var(--black);
+}
+
 .dashboard-holdings {
   grid-column: 1 / -1;
 }
@@ -1173,6 +1354,53 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* .daily-calendar-header {
+    flex-direction: column;
+    align-items: flex-start;
+  } */
+
+  .daily-calendar-title-group {
+    width: 100%;
+  }
+
+  .daily-calendar-month-summary {
+    border-radius: 12px;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
+  .daily-calendar-month-label {
+    min-width: 130px;
+  }
+
+
+
+  .daily-calendar-cell {
+    min-height: 56px;
+    padding: 4px 5px;
+    gap: 1px;
+  }
+
+  .daily-calendar-day {
+    font-size: 0.62rem;
+    line-height: 1.05;
+  }
+
+  .daily-calendar-money {
+    font-size: 0.58rem;
+    line-height: 1.05;
+  }
+
+  .daily-calendar-percent {
+    font-size: 0.55rem;
+    line-height: 1.05;
+  }
+
+  .daily-record-tooltip-line {
+    font-size: 0.68rem;
+  }
+
   .add-form-grid {
     grid-template-columns: 1fr;
   }
@@ -1194,6 +1422,11 @@
     gap: 16px;
   }
 
+  .daily-calendar-weekday-row,
+  .daily-calendar-grid {
+    gap: 3px;
+  }
+
   .goal-main-card {
     width: 220px;
     min-width: 220px;
@@ -1212,6 +1445,11 @@
   .tools-calc-grid {
     grid-template-columns: 1fr;
   }
+  
+  /* .daily-calendar-month-controls {
+    width: 100%;
+    justify-content: space-between;
+  } */
 }
 
 @media (max-width: 425px) {
@@ -1228,6 +1466,36 @@
 
   .page-nav .MuiButton-root svg {
     font-size: 16px;
+  }
+
+  .daily-calendar-cell {
+    min-height: 52px;
+    padding: 3px 4px;
+  }
+
+  .daily-calendar-day {
+    font-size: 0.58rem;
+  }
+
+  .daily-calendar-money {
+    font-size: 0.52rem;
+  }
+
+  .daily-calendar-percent {
+    font-size: 0.5rem;
+  }
+
+  .daily-calendar-month-label {
+    min-width: 110px;
+    font-size: 0.8rem;
+  }
+
+  .daily-calendar-month-summary-item {
+    font-size: 0.68rem;
+  }
+
+  .daily-calendar-month-summary-item strong {
+    font-size: 0.7rem;
   }
 
   /* .currency-picker {

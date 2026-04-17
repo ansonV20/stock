@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import { parseDateValue } from './dateUtils'
 
 export interface ExcelDataRow {
   stocks: string[][]
@@ -136,8 +137,8 @@ function parseTimeToISO(timeValue: string): string {
 
   // Try to parse as standard date string
   try {
-    const parsed = new Date(trimmed)
-    if (!Number.isNaN(parsed.getTime())) {
+    const parsed = parseDateValue(trimmed)
+    if (parsed) {
       return parsed.toISOString()
     }
   } catch (err) {

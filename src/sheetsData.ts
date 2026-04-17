@@ -47,11 +47,18 @@ export function parseNumber(value: string): number {
 }
 
 function normalizeHeader(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return value
+    .toLowerCase()
+    .replace(/%/g, 'percent')
+    .replace(/[^a-z0-9]/g, '')
 }
 
 function findColumnIndex(headers: string[], keys: string[]): number {
-  const normalizedKeys = keys.map((key) => normalizeHeader(key))
+  const normalizedKeys = keys.map((key) => normalizeHeader(key)).filter((key) => key.length > 0)
+
+  if (normalizedKeys.length === 0) {
+    return -1
+  }
 
   return headers.findIndex((header) => {
     const normalizedHeader = normalizeHeader(header)

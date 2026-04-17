@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { normalizeDateTimeInput } from './dateUtils'
 
 export type AppUser = {
   id: string
@@ -219,7 +220,7 @@ export async function insertUserRow(
       currency: row.currency,
       price: normalizeNumberInput(row.price),
       action: row.action,
-      time: row.time,
+      time: normalizeDateTimeInput(row.time),
       quantity: normalizeNumberInput(row.quantity),
       handling_fees: normalizeNumberInput(row.handlingFees ?? '0'),
     }
@@ -237,7 +238,7 @@ export async function insertUserRow(
       stock: row.stock,
       currency: row.currency,
       div: normalizeNumberInput(row.div),
-      time: row.time,
+      time: normalizeDateTimeInput(row.time),
     }
 
     const { error } = await supabase.from('dividend').insert(payload)
@@ -252,7 +253,7 @@ export async function insertUserRow(
     name: row.name,
     currency: row.currency,
     price: normalizeNumberInput(row.price),
-    time: row.time,
+    time: normalizeDateTimeInput(row.time),
     action: row.do,
   }
 
@@ -274,7 +275,7 @@ export async function updateUserRow(
       currency: row.currency,
       price: normalizeNumberInput(row.price),
       action: row.action,
-      time: row.time,
+      time: normalizeDateTimeInput(row.time),
       quantity: normalizeNumberInput(row.quantity),
       handling_fees: normalizeNumberInput(row.handlingFees ?? '0'),
     }
@@ -302,7 +303,7 @@ export async function updateUserRow(
       stock: row.stock,
       currency: row.currency,
       div: normalizeNumberInput(row.div),
-      time: row.time,
+      time: normalizeDateTimeInput(row.time),
     }
 
     const { error } = await supabase
@@ -326,7 +327,7 @@ export async function updateUserRow(
     name: row.name,
     currency: row.currency,
     price: normalizeNumberInput(row.price),
-    time: row.time,
+    time: normalizeDateTimeInput(row.time),
     action: row.do,
   }
 
